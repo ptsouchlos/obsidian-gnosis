@@ -3,3 +3,11 @@ declare module "*.wasm" {
     const bytes: Uint8Array;
     export default bytes;
 }
+
+// `worker:<path>` is bundled on its own by `script/esbuild-worker.mjs` and
+// handed over as source text, which the plugin starts from a blob: a plugin
+// ships as one `main.js` and has no URL to point a worker at.
+declare module "worker:*" {
+    const source: string;
+    export default source;
+}

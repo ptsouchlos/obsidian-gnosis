@@ -7,6 +7,7 @@
 import esbuild from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { runtimeDefine, workerPlugin } from "../script/esbuild-worker.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const vault = join(here, "fixtures", "vault");
@@ -26,7 +27,12 @@ await esbuild.build({
 });
 
 await esbuild.build({
-    entryPoints: ["test/plugin.test.ts", "test/real-vault.test.ts"],
+    entryPoints: [
+        "test/plugin.test.ts",
+        "test/semantic.test.ts",
+        "test/parity.test.ts",
+        "test/real-vault.test.ts",
+    ],
     bundle: true,
     outdir: ".test-build",
     outExtension: { ".js": ".cjs" },
@@ -37,11 +43,16 @@ await esbuild.build({
     sourcemap: "inline",
     loader: { ".wasm": "binary" },
     alias: { obsidian: "./test/stubs/obsidian.ts" },
+    // Loaded from node_modules at run time, as its node build: it carries
+    // ONNX Runtime's native addon, which cannot be bundled.
+    external: ["@huggingface/transformers"],
+    plugins: [workerPlugin({ minify: false })],
     define: {
         // The same inert value the plugin bundle uses, for the same reason.
         // It is why the fixture path is injected rather than derived from
         // `import.meta.url` in the test itself.
         "import.meta.url": '"gnosis://inlined"',
         GNOSIS_TEST_VAULT: JSON.stringify(vault),
+        ...runtimeDefine(),
     },
 });

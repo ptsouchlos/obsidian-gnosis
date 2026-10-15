@@ -17,11 +17,20 @@ export interface GnosisSettings {
     artifactDir: string;
     /** How many results to show. */
     limit: number;
+    /**
+     * Embed queries with the index's model, for hybrid search.
+     *
+     * Off until the reader turns it on, because turning it on downloads the
+     * model — and that is the reader's decision, made with the size and the
+     * source in front of them, not a default.
+     */
+    semanticSearch: boolean;
 }
 
 export const DEFAULT_SETTINGS: GnosisSettings = {
     artifactDir: ".gnosis/artifact",
     limit: 20,
+    semanticSearch: false,
 };
 
 export class GnosisSettingTab extends PluginSettingTab {
@@ -67,6 +76,25 @@ export class GnosisSettingTab extends PluginSettingTab {
                         this.plugin.settings.limit = value;
                         await this.plugin.saveSettings();
                     }),
+            );
+
+        new Setting(containerEl)
+            .setName("Semantic search")
+            .setDesc(
+                "Search by meaning as well as by keyword, with the model your index was built " +
+                    "with. Downloads the model once; queries and notes stay on this device.",
+            )
+            .addToggle((toggle) =>
+                toggle.setValue(this.plugin.settings.semanticSearch).onChange(async (on) => {
+                    if (!on) {
+                        await this.plugin.disableSemanticSearch();
+                        return;
+                    }
+                    // Turning it on asks first; a refusal puts the toggle back.
+                    if (!(await this.plugin.enableSemanticSearch())) {
+                        toggle.setValue(false);
+                    }
+                }),
             );
 
         new Setting(containerEl).setName("Index").setHeading();

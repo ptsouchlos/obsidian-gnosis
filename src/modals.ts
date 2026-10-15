@@ -93,3 +93,54 @@ export class RelatedModal extends HitModal {
         this.notify(`${hit.path} is in the index but not in the vault — re-run \`gnosis export\`.`);
     }
 }
+
+/**
+ * Hybrid search: the query embedded with the index's own model and fused with
+ * the lexical channel, by the same code and weights as the CLI.
+ *
+ * Until the model is ready — the first time, that is a download — it answers
+ * lexically and says so, rather than making the reader wait for a picker.
+ */
+export class SemanticSearchModal extends HitModal {
+    /** Bumped per keystroke, so a slow answer to an old query is dropped. */
+    private ticket = 0;
+    private last: Hit[] = [];
+
+    constructor(
+        app: App,
+        private readonly runSearch: (query: string) => Promise<Hit[]>,
+        semantic: boolean,
+        private readonly notify: (message: string) => void,
+        private readonly debounceMs = 150,
+    ) {
+        super(app);
+        this.setPlaceholder(
+            semantic
+                ? "Search your vault by meaning with gnosis…"
+                : "Search your vault with gnosis (keywords while the model loads)…",
+        );
+        this.emptyStateText = "No matches.";
+    }
+
+    override async getSuggestions(query: string): Promise<Hit[]> {
+        const ticket = ++this.ticket;
+        if (query.trim() === "") {
+            return [];
+        }
+        // Embedding is the slow part of a query, so wait for typing to pause
+        // rather than embed every prefix of a word.
+        await new Promise((resolve) => setTimeout(resolve, this.debounceMs));
+        if (ticket !== this.ticket) {
+            return this.last;
+        }
+        const hits = await this.runSearch(query);
+        if (ticket === this.ticket) {
+            this.last = hits;
+        }
+        return hits;
+    }
+
+    protected override showMissing(hit: Hit): void {
+        this.notify(`${hit.path} is in the index but not in the vault — re-run \`gnosis export\`.`);
+    }
+}

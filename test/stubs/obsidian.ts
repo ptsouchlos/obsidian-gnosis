@@ -87,6 +87,21 @@ export class Notice {
     constructor(message: string, _timeout?: number) {
         notices.push(message);
     }
+
+    /** An updated message is a new entry, so a test sees every state shown. */
+    setMessage(message: string): this {
+        notices.push(message);
+        return this;
+    }
+
+    hide(): void {}
+}
+
+/** A plain modal: the consent prompt is the only one, and tests answer it directly. */
+export class Modal {
+    constructor(readonly app: App) {}
+    open(): void {}
+    close(): void {}
 }
 
 export interface Command {
@@ -202,6 +217,12 @@ export class Setting {
         return this;
     }
     addSlider(_cb: unknown): this {
+        return this;
+    }
+    addToggle(_cb: unknown): this {
+        return this;
+    }
+    addButton(_cb: unknown): this {
         return this;
     }
 }

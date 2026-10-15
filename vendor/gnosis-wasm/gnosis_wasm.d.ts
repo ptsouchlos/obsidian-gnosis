@@ -2,6 +2,55 @@
 /* eslint-disable */
 
 /**
+ * Accumulates documents, then packs them into an artifact.
+ */
+export class Builder {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Offer one document to the index.
+     *
+     * `mtime_ms` is a JavaScript timestamp in milliseconds; the artifact
+     * records seconds, as the CLI does from the filesystem.
+     */
+    addDocument(path: string, text: string, mtime_ms: number): any;
+    /**
+     * A builder with nothing to reuse: every document will be embedded.
+     */
+    static create(spec: any): Builder;
+    /**
+     * How many documents have been offered.
+     */
+    documentCount(): number;
+    /**
+     * Pack everything added into shards.
+     *
+     * `created_unix` comes from the client because wasm has no clock. It is
+     * the one field that makes two otherwise identical artifacts differ.
+     */
+    finish(created_unix: number): any;
+    /**
+     * A builder that reuses an existing artifact: a document whose content
+     * hash matches keeps its chunks *and its vectors*, so an ordinary day's
+     * editing re-embeds a handful of chunks rather than a vault.
+     */
+    static fromArtifact(spec: any, manifest_json: string, shards: Map<any, any>): Builder;
+    /**
+     * How many documents are waiting for vectors, for a progress report.
+     */
+    pendingCount(): number;
+    /**
+     * Supply one document's vectors, flat and in chunk order.
+     *
+     * Flat rather than an array of arrays: this is the one call that moves
+     * real volume across the boundary, and a `Float32Array` of
+     * `chunks * dim` copies once.
+     */
+    setVectors(path: string, vectors: Float32Array): void;
+}
+
+/**
  * A loaded artifact, queried through gnosis's own retrieval pipeline.
  */
 export class Index {
@@ -9,7 +58,7 @@ export class Index {
     free(): void;
     [Symbol.dispose](): void;
     /**
-     * What this artifact is: its models and their pooling, its dimensions,
+     * What this artifact is: its models, their pooling and prefixes, its dimensions,
      * how much it holds and when it was built.
      */
     info(): any;
@@ -84,7 +133,15 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly __wbg_builder_free: (a: number, b: number) => void;
     readonly __wbg_index_free: (a: number, b: number) => void;
+    readonly builder_addDocument: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly builder_create: (a: number, b: number) => void;
+    readonly builder_documentCount: (a: number, b: number) => void;
+    readonly builder_finish: (a: number, b: number, c: number) => void;
+    readonly builder_fromArtifact: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly builder_pendingCount: (a: number, b: number) => void;
+    readonly builder_setVectors: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly index_info: (a: number, b: number) => void;
     readonly index_lexicalSearch: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly index_open: (a: number, b: number, c: number, d: number) => void;
