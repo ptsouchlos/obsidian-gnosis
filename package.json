@@ -1,0 +1,19 @@
+{
+  "name": "obsidian-gnosis",
+  "version": "0.1.0",
+  "description": "Search an Obsidian vault with gnosis's own retrieval pipeline, compiled to WebAssembly",
+  "private": true,
+  "scripts": {
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "check": "tsc --noEmit",
+    "test": "npm run build && node test/build.mjs && node --test .test-build/*.test.cjs test/bundle.test.cjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.14.1",
+    "builtin-modules": "4.0.0",
+    "esbuild": "0.25.2",
+    "obsidian": "1.14.4",
+    "typescript": "5.8.3"
+  }
+}

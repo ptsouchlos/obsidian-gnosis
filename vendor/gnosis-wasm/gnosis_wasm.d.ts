@@ -1,0 +1,122 @@
+/* tslint:disable */
+/* eslint-disable */
+
+/**
+ * A loaded artifact, queried through gnosis's own retrieval pipeline.
+ */
+export class Index {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * What this artifact is: its models and their pooling, its dimensions,
+     * how much it holds and when it was built.
+     */
+    info(): any;
+    /**
+     * Search the lexical channel alone, with no model at all.
+     *
+     * This is the tier a client can offer before it has downloaded anything:
+     * BM25+ over the artifact's own text, scored and ranked by the same code
+     * the hybrid path uses, with the title bonus applied. On scifact it
+     * scores 0.666 nDCG@10 against the hybrid path's 0.722 — worse, and far
+     * from nothing.
+     */
+    lexicalSearch(query: string, limit: number, filter: any): any;
+    /**
+     * Assemble an index from bytes the client has already read.
+     *
+     * `shards` maps each shard's name, as the manifest lists it, to its
+     * bytes. Shards are verified against the manifest's hashes, so a
+     * partially synced artifact fails to open rather than answering queries
+     * from a mixture of two indexes.
+     */
+    static open(manifest_json: string, shards: Map<any, any>): Index;
+    /**
+     * Documents most similar to `path`'s own chunks — the other model-free
+     * tier, at full quality, since both sides of the comparison are vectors
+     * the artifact already carries.
+     *
+     * Unless `include_linked` is set, the source and everything it links to
+     * are excluded: the point is unlinked mentions. Link resolution here
+     * matches filename stems only — an artifact carries no frontmatter, so a
+     * host with its own alias index (Obsidian has one) should resolve aliases
+     * there and pass the results in a filter rather than expect this to.
+     */
+    related(path: string, limit: number, include_linked: boolean, filter: any): any;
+    /**
+     * The configuration in force, so a client can report it.
+     */
+    searchConfig(): any;
+    /**
+     * Run a hybrid query: one vector per space, fused with the lexical
+     * channel in the text space.
+     *
+     * `vectors` maps a space name (`"text"`, `"image"`) to a `Float32Array`.
+     * The spaces searched are exactly the ones a vector was supplied for —
+     * a space without an embedder is not silently skipped, it is simply not
+     * asked about.
+     */
+    search(query: string, vectors: Map<any, any>, limit: number, filter: any): any;
+    /**
+     * Override the retrieval configuration.
+     *
+     * The artifact does not carry one — it is the indexing machine's local
+     * setting, and the defaults here are the measured ones. A client that
+     * changes it is choosing to diverge from what this project's numbers
+     * describe, which is why it is a separate, explicit call.
+     */
+    setSearchConfig(config: any): void;
+    /**
+     * Compare a client's own view of its vault against what the artifact
+     * holds.
+     *
+     * The client does the walk — only it can — and this does the comparison.
+     * Nothing here can *fix* staleness: only the machine with the models can
+     * re-index. So the requirement is an accurate report, and an entry whose
+     * freshness cannot be determined is reported as such rather than counted
+     * as fresh.
+     */
+    staleness(entries: any): any;
+}
+
+export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
+
+export interface InitOutput {
+    readonly memory: WebAssembly.Memory;
+    readonly __wbg_index_free: (a: number, b: number) => void;
+    readonly index_info: (a: number, b: number) => void;
+    readonly index_lexicalSearch: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly index_open: (a: number, b: number, c: number, d: number) => void;
+    readonly index_related: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly index_search: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly index_searchConfig: (a: number, b: number) => void;
+    readonly index_setSearchConfig: (a: number, b: number, c: number) => void;
+    readonly index_staleness: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_export: (a: number, b: number) => number;
+    readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_export3: (a: number) => void;
+    readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
+}
+
+export type SyncInitInput = BufferSource | WebAssembly.Module;
+
+/**
+ * Instantiates the given `module`, which can either be bytes or
+ * a precompiled `WebAssembly.Module`.
+ *
+ * @param {{ module: SyncInitInput }} module - Passing `SyncInitInput` directly is deprecated.
+ *
+ * @returns {InitOutput}
+ */
+export function initSync(module: { module: SyncInitInput } | SyncInitInput): InitOutput;
+
+/**
+ * If `module_or_path` is {RequestInfo} or {URL}, makes a request and
+ * for everything else, calls `WebAssembly.instantiate` directly.
+ *
+ * @param {{ module_or_path: InitInput | Promise<InitInput> }} module_or_path - Passing `InitInput` directly is deprecated.
+ *
+ * @returns {Promise<InitOutput>}
+ */
+export default function __wbg_init (module_or_path?: { module_or_path: InitInput | Promise<InitInput> } | InitInput | Promise<InitInput>): Promise<InitOutput>;

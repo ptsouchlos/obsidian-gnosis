@@ -1,0 +1,10 @@
+{
+  "id": "gnosis",
+  "name": "gnosis",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Search your vault with gnosis's retrieval pipeline, from a portable index built on your own machine. No server, no API key.",
+  "author": "ptsouchlos",
+  "authorUrl": "https://github.com/ptsouchlos",
+  "isDesktopOnly": false
+}
