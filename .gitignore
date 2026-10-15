@@ -1,0 +1,5 @@
+node_modules/
+.test-build/
+# The bundle itself: built from src/ and vendor/, and installed into a vault
+# rather than committed.
+main.js
