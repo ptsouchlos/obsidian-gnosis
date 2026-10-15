@@ -1,5 +1,5 @@
 {
-  "format_version": 4,
+  "format_version": 5,
   "created_unix": 1700000400,
   "spaces": [
     {
@@ -7,7 +7,9 @@
       "model": {
         "id": "bge-small-en-v1.5",
         "pooling": "cls",
-        "dim": 4
+        "dim": 4,
+        "query_prefix": "Represent this sentence for searching relevant passages: ",
+        "document_prefix": ""
       }
     },
     {
@@ -16,7 +18,9 @@
         "id": "clip-vit-b-32-vision",
         "pooling": "mean",
         "dim": 3,
-        "query_id": "clip-vit-b-32-text"
+        "query_id": "clip-vit-b-32-text",
+        "query_prefix": "",
+        "document_prefix": ""
       }
     }
   ],
@@ -30,7 +34,7 @@
   "shards": [
     {
       "name": "shard-0000.bin",
-      "hash": "ccd55d0294b1a136f46e0c822922b01a2928869dbabb80de09e91143723c72b7",
+      "hash": "e2d50567e005e25d49e5473430d674d4f33eb76ad4f99e0127c125707c7641e4",
       "documents": 4,
       "chunks": 6
     }

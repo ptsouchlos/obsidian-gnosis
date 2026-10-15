@@ -1,6 +1,191 @@
 /* @ts-self-types="./gnosis_wasm.d.ts" */
 
 /**
+ * Accumulates documents, then packs them into an artifact.
+ */
+export class Builder {
+    static __wrap(ptr) {
+        const obj = Object.create(Builder.prototype);
+        obj.__wbg_ptr = ptr;
+        BuilderFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        BuilderFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_builder_free(ptr, 0);
+    }
+    /**
+     * Offer one document to the index.
+     *
+     * `mtime_ms` is a JavaScript timestamp in milliseconds; the artifact
+     * records seconds, as the CLI does from the filesystem.
+     * @param {string} path
+     * @param {string} text
+     * @param {number} mtime_ms
+     * @returns {any}
+     */
+    addDocument(path, text, mtime_ms) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.builder_addDocument(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, mtime_ms);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * A builder with nothing to reuse: every document will be embedded.
+     * @param {any} spec
+     * @returns {Builder}
+     */
+    static create(spec) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.builder_create(retptr, addHeapObject(spec));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return Builder.__wrap(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * How many documents have been offered.
+     * @returns {number}
+     */
+    documentCount() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.builder_documentCount(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Pack everything added into shards.
+     *
+     * `created_unix` comes from the client because wasm has no clock. It is
+     * the one field that makes two otherwise identical artifacts differ.
+     * @param {number} created_unix
+     * @returns {any}
+     */
+    finish(created_unix) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.builder_finish(retptr, this.__wbg_ptr, created_unix);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * A builder that reuses an existing artifact: a document whose content
+     * hash matches keeps its chunks *and its vectors*, so an ordinary day's
+     * editing re-embeds a handful of chunks rather than a vault.
+     * @param {any} spec
+     * @param {string} manifest_json
+     * @param {Map<any, any>} shards
+     * @returns {Builder}
+     */
+    static fromArtifact(spec, manifest_json, shards) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(manifest_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.builder_fromArtifact(retptr, addHeapObject(spec), ptr0, len0, addBorrowedObject(shards));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return Builder.__wrap(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            heap[stack_pointer++] = undefined;
+        }
+    }
+    /**
+     * How many documents are waiting for vectors, for a progress report.
+     * @returns {number}
+     */
+    pendingCount() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.builder_pendingCount(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Supply one document's vectors, flat and in chunk order.
+     *
+     * Flat rather than an array of arrays: this is the one call that moves
+     * real volume across the boundary, and a `Float32Array` of
+     * `chunks * dim` copies once.
+     * @param {string} path
+     * @param {Float32Array} vectors
+     */
+    setVectors(path, vectors) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.builder_setVectors(retptr, this.__wbg_ptr, ptr0, len0, addBorrowedObject(vectors));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            heap[stack_pointer++] = undefined;
+        }
+    }
+}
+if (Symbol.dispose) Builder.prototype[Symbol.dispose] = Builder.prototype.free;
+
+/**
  * A loaded artifact, queried through gnosis's own retrieval pipeline.
  */
 export class Index {
@@ -21,7 +206,7 @@ export class Index {
         wasm.__wbg_index_free(ptr, 0);
     }
     /**
-     * What this artifact is: its models and their pooling, its dimensions,
+     * What this artifact is: its models, their pooling and prefixes, its dimensions,
      * how much it holds and when it was built.
      * @returns {any}
      */
@@ -304,6 +489,14 @@ function __wbg_get_imports() {
             const ret = getObject(arg0).length;
             return ret;
         },
+        __wbg_new_28744009d011f847: function() {
+            const ret = new Map();
+            return addHeapObject(ret);
+        },
+        __wbg_new_from_slice_9a868026ffa4208a: function(arg0, arg1) {
+            const ret = new Uint8Array(getArrayU8FromWasm0(arg0, arg1));
+            return addHeapObject(ret);
+        },
         __wbg_next_f4aac29c42af995c: function() { return handleError(function (arg0) {
             const ret = getObject(arg0).next();
             return addHeapObject(ret);
@@ -318,6 +511,14 @@ function __wbg_get_imports() {
         __wbg_prototypesetcall_bc27214492979395: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), getObject(arg2));
         },
+        __wbg_set_145a351398b48c65: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = Reflect.set(getObject(arg0), getObject(arg1), getObject(arg2));
+            return ret;
+        }, arguments); },
+        __wbg_set_6ae97e73113c4f0b: function(arg0, arg1, arg2) {
+            const ret = getObject(arg0).set(getObject(arg1), getObject(arg2));
+            return addHeapObject(ret);
+        },
         __wbg_size_c2498a9484dc789c: function(arg0) {
             const ret = getObject(arg0).size;
             return ret;
@@ -330,6 +531,11 @@ function __wbg_get_imports() {
             const ret = getObject(arg0).value;
             return addHeapObject(ret);
         },
+        __wbindgen_generic_0000000000000001: function(arg0, arg1) {
+            // Cast intrinsic for `Ref(String) -> Externref`.
+            const ret = getStringFromWasm0(arg0, arg1);
+            return addHeapObject(ret);
+        },
         __wbindgen_object_drop_ref: function(arg0) {
             takeObject(arg0);
         },
@@ -340,6 +546,9 @@ function __wbg_get_imports() {
     };
 }
 
+const BuilderFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_builder_free(ptr, 1));
 const IndexFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_index_free(ptr, 1));

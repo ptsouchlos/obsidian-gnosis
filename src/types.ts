@@ -25,6 +25,10 @@ export interface SpaceInfo {
     model: string;
     queryModel: string;
     pooling: string;
+    /** Prepended to a query before embedding it, as the index recorded it. */
+    queryPrefix: string;
+    /** Prepended to indexed content; only a build needs it. */
+    documentPrefix: string;
     dim: number;
     chunks: number;
 }

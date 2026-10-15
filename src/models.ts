@@ -1,0 +1,51 @@
+//! Where to fetch the model an index was built with, so a query lands in the
+//! same vector space as the stored chunks.
+//!
+//! This table is deliberately the *only* model knowledge in the plugin. What a
+//! query must be embedded *with* — pooling and the query prefix — comes from
+//! the index's own manifest, because both are per-index facts the plugin has no
+//! business guessing. What is left is the client's own concern: which files to
+//! download for a model id.
+//!
+//! Each entry pins the repository and the exact revision the gnosis CLI's
+//! embedder (fastembed) downloads, and the same ONNX file. Matching them is what
+//! made query parity exact when measured — cosine 1.000000 between vectors
+//! computed here and vectors gnosis stored — and a different export of "the same
+//! model" would not be.
+
+export interface QueryModel {
+    /// The Hugging Face repository.
+    repo: string;
+    /// The commit fastembed resolved, so an upstream re-export cannot move the
+    /// vectors out from under an existing index.
+    revision: string;
+    /// transformers.js's name for the ONNX file: `fp32` is `onnx/model.onnx`,
+    /// the file fastembed loads.
+    dtype: "fp32";
+    /// What the reader is asked to download, for the consent prompt.
+    downloadBytes: number;
+}
+
+/** Keyed by the model id an index's manifest records. */
+export const QUERY_MODELS: Readonly<Record<string, QueryModel>> = {
+    "bge-small-en-v1.5": {
+        repo: "Xenova/bge-small-en-v1.5",
+        revision: "ea104dacec62c0de699686887e3f920caeb4f3e3",
+        dtype: "fp32",
+        // onnx/model.onnx 127 MB, tokenizer 0.7 MB, configs.
+        downloadBytes: 134_000_000,
+    },
+    "multilingual-e5-small": {
+        repo: "intfloat/multilingual-e5-small",
+        revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        dtype: "fp32",
+        // onnx/model.onnx 449 MB, tokenizer 17 MB: the vocabulary is what
+        // makes it multilingual, and what makes it large.
+        downloadBytes: 487_000_000,
+    },
+};
+
+/** The model to embed a query with, or null if the plugin cannot. */
+export function queryModelFor(modelId: string): QueryModel | null {
+    return QUERY_MODELS[modelId] ?? null;
+}
