@@ -1,0 +1,38 @@
+{
+  "format_version": 4,
+  "created_unix": 1700000400,
+  "spaces": [
+    {
+      "space": "text",
+      "model": {
+        "id": "bge-small-en-v1.5",
+        "pooling": "cls",
+        "dim": 4
+      }
+    },
+    {
+      "space": "image",
+      "model": {
+        "id": "clip-vit-b-32-vision",
+        "pooling": "mean",
+        "dim": 3,
+        "query_id": "clip-vit-b-32-text"
+      }
+    }
+  ],
+  "quantization": "f32",
+  "compression": "deflate",
+  "roots": [
+    "notes",
+    "work"
+  ],
+  "shard_docs": 256,
+  "shards": [
+    {
+      "name": "shard-0000.bin",
+      "hash": "ccd55d0294b1a136f46e0c822922b01a2928869dbabb80de09e91143723c72b7",
+      "documents": 4,
+      "chunks": 6
+    }
+  ]
+}
