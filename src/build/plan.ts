@@ -130,7 +130,7 @@ function estimate(progress: BuildProgress): string {
 /** The status bar while a build runs. */
 export function statusLine(progress: BuildProgress): string {
     return (
-        `gnosis: indexing ${progress.notesDone.toLocaleString()}/${progress.notesTotal.toLocaleString()} notes` +
+        `Gnosis: indexing ${progress.notesDone.toLocaleString()}/${progress.notesTotal.toLocaleString()} notes` +
         ` · ${progress.chunksEmbedded.toLocaleString()} chunks embedded${estimate(progress)}`
     );
 }

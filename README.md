@@ -1,4 +1,4 @@
-# gnosis for Obsidian
+# Gnosis for Obsidian
 
 Search your vault with [gnosis](https://github.com/ptsouchlos/gnosis)'s own
 retrieval pipeline, reading a portable index you built on your own machine.

@@ -43,7 +43,7 @@ export function megabytes(bytes: number): string {
 export function consentLines(downloads: Download[]): string[] {
     const total = downloads.reduce((sum, d) => sum + d.bytes, 0);
     return [
-        `gnosis embeds your notes and your queries with this model, here, on this device. ` +
+        `Gnosis embeds your notes and your queries with this model, here, on this device. ` +
             `Using it downloads, once (${megabytes(total)} in all):`,
         ...downloads.map((d) => `• ${d.what} — ${megabytes(d.bytes)} from ${d.from}`),
         "Both are cached, so nothing is downloaded again. Your notes and your queries never " +

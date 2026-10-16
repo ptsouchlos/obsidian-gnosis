@@ -43,7 +43,7 @@ export class LexicalSearchModal extends HitModal {
         private readonly notify: (message: string) => void,
     ) {
         super(app);
-        this.setPlaceholder("Search your vault with gnosis…");
+        this.setPlaceholder("Search your vault with Gnosis…");
         this.emptyStateText = "No matches.";
     }
 
@@ -116,8 +116,8 @@ export class SemanticSearchModal extends HitModal {
         super(app);
         this.setPlaceholder(
             semantic
-                ? "Search your vault by meaning with gnosis…"
-                : "Search your vault with gnosis (keywords while the model loads)…",
+                ? "Search your vault by meaning with Gnosis…"
+                : "Search your vault with Gnosis (keywords while the model loads)…",
         );
         this.emptyStateText = "No matches.";
     }
