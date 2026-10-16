@@ -11,11 +11,33 @@ import { paneFor } from "../modals.js";
 import { formatScore, hitSnippet, noteName, resolveHit } from "../results.js";
 import type { Hit } from "../types.js";
 import { RelatedFollower, type RelatedState } from "./follow.js";
+import { mapLayout, type MapPoint } from "./layout.js";
 
 export const RELATED_VIEW = "gnosis-related";
 
 /** Long enough to skip the notes passed through while switching quickly. */
 const FOLLOW_DEBOUNCE_MS = 200;
+
+/** The map's coordinate space: a disc of this radius, with room around it for labels. */
+const MAP_RADIUS = 100;
+const MAP_EXTENT = 116;
+
+/** Hovering a dot lights its row, and the other way round. */
+function linkHover(dots: SVGElement[], rows: HTMLElement[]): void {
+    dots.forEach((dot, i) => {
+        const row = rows[i]!;
+        const on = (lit: boolean) => {
+            dot.classList.toggle("is-hovered", lit);
+            row.toggleClass("is-hovered", lit);
+        };
+        for (const el of [dot, row]) {
+            el.addEventListener("mouseenter", () => on(true));
+            el.addEventListener("mouseleave", () => on(false));
+            el.addEventListener("focusin", () => on(true));
+            el.addEventListener("focusout", () => on(false));
+        }
+    });
+}
 
 export class RelatedView extends ItemView {
     readonly follower: RelatedFollower;
@@ -201,15 +223,61 @@ export class RelatedView extends ItemView {
                         : "Nothing related that it does not already link to.",
                 );
                 return;
-            case "ready":
-                this.drawList(state.hits);
+            case "ready": {
+                const points = state.pairs === null ? null : mapLayout(state.hits.map((h) => h.score), state.pairs);
+                const dots = points === null ? null : this.drawMap(state.path, state.hits, points);
+                const rows = this.drawList(state.hits);
+                if (dots !== null) {
+                    linkHover(dots, rows);
+                }
                 return;
+            }
         }
     }
 
-    private drawList(hits: Hit[]): void {
+    /**
+     * The map: the open note at the center, each related note a dot whose
+     * distance is its score and whose direction puts alike notes together
+     * (see `layout.ts`). The list below is the accessible form of the same data.
+     */
+    private drawMap(path: string, hits: Hit[], points: MapPoint[]): SVGElement[] {
+        const svg = this.bodyEl.createSvg("svg", {
+            cls: "gnosis-related-map",
+            attr: { viewBox: `${-MAP_EXTENT} ${-MAP_EXTENT} ${2 * MAP_EXTENT} ${2 * MAP_EXTENT}`, role: "group" },
+        });
+        svg.setAttribute("aria-label", `Map of the notes most related to ${noteName({ path } as Hit)}`);
+        for (const r of [0.33, 0.66, 1]) {
+            svg.createSvg("circle", { cls: "gnosis-related-ring", attr: { r: r * MAP_RADIUS } });
+        }
+        svg.createSvg("circle", { cls: "gnosis-related-center", attr: { r: 5 } });
+
+        return hits.map((hit, i) => {
+            const { x, y } = points[i]!;
+            const dot = svg.createSvg("g", {
+                cls: "gnosis-related-dot",
+                attr: {
+                    transform: `translate(${(x * MAP_RADIUS).toFixed(2)} ${(y * MAP_RADIUS).toFixed(2)})`,
+                    tabindex: "0",
+                    role: "link",
+                    "aria-label": `${noteName(hit)}, ${formatScore(hit.score)}`,
+                },
+            });
+            dot.createSvg("title").textContent = noteName(hit);
+            dot.createSvg("circle", { attr: { r: 3.5 } });
+            dot.createSvg("text", { attr: { y: -6 } }).textContent = hit.score.toFixed(2);
+            dot.addEventListener("click", (evt) => this.openHit(hit, evt));
+            dot.addEventListener("keydown", (evt) => {
+                if (evt.key === "Enter") {
+                    this.openHit(hit, evt);
+                }
+            });
+            return dot;
+        });
+    }
+
+    private drawList(hits: Hit[]): HTMLElement[] {
         const list = this.bodyEl.createDiv({ cls: "gnosis-related-list" });
-        for (const hit of hits) {
+        return hits.map((hit) => {
             const row = list.createDiv({ cls: "gnosis-related-row" });
             const line = row.createDiv({ cls: "gnosis-related-line" });
             const toggle = line.createEl("button", {
@@ -260,11 +328,12 @@ export class RelatedView extends ItemView {
                 toggle.setAttribute("aria-expanded", String(open));
                 row.toggleClass("is-open", open);
             });
-        }
+            return row;
+        });
     }
 
     // Not `open`: that is `View.open`, which Obsidian calls to show the view.
-    private openHit(hit: Hit, evt: MouseEvent): void {
+    private openHit(hit: Hit, evt: MouseEvent | KeyboardEvent): void {
         const file: TFile | null = resolveHit(this.app, hit);
         if (file === null) {
             this.message(`${noteName(hit)} is in the index but not in the vault — update the index.`);

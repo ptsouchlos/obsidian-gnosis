@@ -16,7 +16,12 @@ export type RelatedState =
     /** The note is newer than the index: written or renamed since the last build. */
     | { kind: "stale"; path: string }
     | { kind: "empty"; path: string }
-    | { kind: "ready"; path: string; hits: Hit[] };
+    /**
+     * `pairs[i][j]` is gnosis's score for `hits[j]` asked from `hits[i]`, for
+     * the map; null when the index could not score them, and the panel is a
+     * list alone.
+     */
+    | { kind: "ready"; path: string; hits: Hit[]; pairs: (number | null)[][] | null };
 
 /** Answers "what is related to this note", without raising notices. */
 export type RelatedSource = (path: string) => Promise<RelatedState>;
