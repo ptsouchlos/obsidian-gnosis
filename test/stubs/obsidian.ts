@@ -273,9 +273,13 @@ export class PluginSettingTab {
     ) {}
 
     display(): void {}
+    hide(): void {}
 }
 
+export function setIcon(_el: unknown, _icon: string): void {}
+
 export class Setting {
+    readonly settingEl = { addClass(_cls: string): void {} };
     constructor(_containerEl: unknown) {}
     setName(_name: string): this {
         return this;

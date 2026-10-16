@@ -17,7 +17,16 @@
 import { Notice, Platform, Plugin } from "obsidian";
 import type { TFile } from "obsidian";
 import type { Index } from "../vendor/gnosis-wasm/gnosis_wasm.js";
-import { ArtifactMissing, openArtifact, readArtifact, startWasm, type RawArtifact } from "./artifact.js";
+import {
+    ArtifactMissing,
+    MANIFEST_NAME,
+    join,
+    openArtifact,
+    parseManifest,
+    readArtifact,
+    startWasm,
+    type RawArtifact,
+} from "./artifact.js";
 import { IndexedDbCheckpoints, type CheckpointStore } from "./build/checkpoints.js";
 import { runBuild, type BuildProgress, type BuildSpec, type Note } from "./build/job.js";
 import { replaceWarning, specForNewIndex, specFromManifest, statusLine } from "./build/plan.js";
@@ -35,6 +44,7 @@ import {
 import { LexicalSearchModal, RelatedModal, SemanticSearchModal } from "./modals.js";
 import { queryModelFor } from "./models.js";
 import { DEFAULT_SETTINGS, GnosisSettingTab, type GnosisSettings } from "./settings.js";
+import { indexStatus, type IndexStatus } from "./status.js";
 import type { Hit, IndexInfo, SpaceInfo } from "./types.js";
 
 /** An embedder for one model, from the moment it starts loading. */
@@ -65,7 +75,11 @@ export default class GnosisPlugin extends Plugin {
     isMobile = (): boolean => Platform.isMobile;
 
     private building: AbortController | null = null;
+    /** The build's latest report, for the settings tab's card. */
+    private buildProgress: BuildProgress | null = null;
     private status: HTMLElement | null = null;
+    /** Whoever is showing the index's state: the settings tab, while open. */
+    private readonly statusListeners = new Set<() => void>();
 
     override async onload(): Promise<void> {
         await this.loadSettings();
@@ -110,8 +124,7 @@ export default class GnosisPlugin extends Plugin {
                     return false;
                 }
                 if (!checking) {
-                    this.building.abort();
-                    new Notice("Gnosis: canceling — finishing the batch in flight…");
+                    this.cancelBuild();
                 }
                 return true;
             },
@@ -375,15 +388,83 @@ export default class GnosisPlugin extends Plugin {
         }
         const controller = new AbortController();
         this.building = controller;
+        this.statusChanged();
         try {
             await this.runBuildCommand(controller.signal);
         } catch (error) {
             new Notice(`Gnosis: the index build failed — ${describe(error)}. The existing index is unchanged.`, 10_000);
         } finally {
             this.building = null;
+            this.buildProgress = null;
             this.status?.remove();
             this.status = null;
+            this.statusChanged();
         }
+    }
+
+    /** Stop the build in flight; it checkpoints, so the next one resumes. */
+    cancelBuild(): void {
+        if (this.building === null || this.building.signal.aborted) {
+            return;
+        }
+        this.building.abort();
+        new Notice("Gnosis: canceling — finishing the batch in flight…");
+    }
+
+    /** Be told whenever the index's state may have changed. Returns the unsubscribe. */
+    onStatusChange(listener: () => void): () => void {
+        this.statusListeners.add(listener);
+        return () => this.statusListeners.delete(listener);
+    }
+
+    private statusChanged(): void {
+        for (const listener of this.statusListeners) {
+            listener();
+        }
+    }
+
+    /**
+     * Everything the settings tab's index card shows.
+     *
+     * Read from the manifest alone, not by opening the index: opening reads
+     * every shard, which is not worth doing to show a count.
+     */
+    async indexStatus(): Promise<IndexStatus> {
+        const dir = this.settings.artifactDir;
+        const manifestPath = join(dir, MANIFEST_NAME);
+        let manifestJson: string | null = null;
+        let readError: string | null = null;
+        try {
+            if (await this.app.vault.adapter.exists(manifestPath)) {
+                manifestJson = await this.app.vault.adapter.read(manifestPath);
+                parseManifest(manifestJson, manifestPath);
+            }
+        } catch (error) {
+            readError = describe(error);
+        }
+        const writtenHere = manifestJson !== null && (await manifestHash(manifestJson)) === this.lastWritten();
+
+        // A build in flight is the state; a checkpoint only matters without one.
+        let checkpointNotes: number | null = null;
+        if (this.building === null) {
+            const saved = await this.checkpoints.load(this.vaultKey()).catch(() => null);
+            if (saved !== null) {
+                const manifest = JSON.parse(saved.artifact.manifestJson) as { shards: { documents: number }[] };
+                checkpointNotes = manifest.shards.reduce((n, s) => n + s.documents, 0);
+            }
+        }
+
+        return indexStatus(
+            {
+                manifestJson,
+                readError,
+                writtenHere,
+                building: this.building === null ? null : { progress: this.buildProgress },
+                checkpointNotes,
+                vaultNotes: this.app.vault.getMarkdownFiles().length,
+            },
+            dir,
+        );
     }
 
     private async runBuildCommand(signal: AbortSignal): Promise<void> {
@@ -444,7 +525,11 @@ export default class GnosisPlugin extends Plugin {
             embed: (texts) => embedder.embed(texts),
             checkpoint: (artifact) => this.checkpoints.save(vault, { specKey, artifact, savedAt: Date.now() }),
             signal,
-            onProgress: (progress: BuildProgress) => this.status?.setText(statusLine(progress)),
+            onProgress: (progress: BuildProgress) => {
+                this.buildProgress = progress;
+                this.status?.setText(statusLine(progress));
+                this.statusChanged();
+            },
             now: () => Date.now(),
             yieldToUi: () => new Promise((resolve) => setTimeout(resolve, 0)),
             checkpointEveryMs: this.checkpointEveryMs,
