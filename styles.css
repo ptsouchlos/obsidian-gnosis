@@ -288,3 +288,48 @@
 .gnosis-step-arrow {
     color: var(--text-faint);
 }
+
+/* The model card: what this device holds of the embedding model. */
+
+.gnosis-model-card {
+    display: flex;
+    align-items: center;
+    gap: var(--size-4-4);
+}
+
+.gnosis-model-words {
+    flex: 1;
+    min-width: 0;
+}
+
+.gnosis-model-name {
+    font-weight: var(--font-medium);
+    margin-bottom: var(--size-2-2);
+}
+
+.gnosis-index-state.gnosis-model-state {
+    font-weight: var(--font-normal);
+    font-size: var(--font-ui-small);
+    border-right: none;
+    padding-right: 0;
+}
+
+.gnosis-model-card[data-state="ready"] .gnosis-dot,
+.gnosis-model-card[data-state="downloaded"] .gnosis-dot {
+    background: var(--color-green);
+}
+
+.gnosis-model-card[data-state="loading"] .gnosis-dot {
+    background: var(--interactive-accent);
+    animation: gnosis-pulse 1.6s ease-in-out infinite;
+}
+
+.gnosis-model-card[data-state="failed"] .gnosis-dot {
+    background: var(--color-red);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gnosis-model-card[data-state="loading"] .gnosis-dot {
+        animation: none;
+    }
+}

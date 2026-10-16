@@ -127,3 +127,73 @@ export function indexStatus(input: StatusInput, artifactDir: string): IndexStatu
     }
     return { ...live, state: "ready", label: "Ready", detail: "", action: "update" };
 }
+
+export type ModelState = "unsupported" | "absent" | "downloaded" | "loading" | "ready" | "failed";
+
+export interface ModelStatus {
+    state: ModelState;
+    label: string;
+    detail: string;
+    /** "id · 384d", the model this vault's index uses or would be built with. */
+    model: string;
+    /** Whether there is anything on this device to delete, and it is safe to. */
+    canDelete: boolean;
+}
+
+export interface ModelInput {
+    modelId: string;
+    dim: number;
+    /** Whether the plugin can run this model at all. */
+    supported: boolean;
+    /** Bytes this device holds of it, model and runtime; null if unknown. */
+    heldBytes: number | null;
+    /** Whether the weights are among them. */
+    complete: boolean;
+    /** What a first use downloads, for "not downloaded yet". */
+    downloadBytes: number;
+    embedder: "loading" | "ready" | null;
+    error: string | null;
+    /** A build uses the model; deleting it mid-build is refused. */
+    building: boolean;
+}
+
+function mb(bytes: number): string {
+    return `${(bytes / 1_000_000).toFixed(bytes < 10_000_000 ? 1 : 0)} MB`;
+}
+
+export function modelStatus(input: ModelInput): ModelStatus {
+    const model = `${input.modelId} · ${input.dim}d`;
+    const held = input.heldBytes ?? 0;
+    const canDelete = held > 0 && input.embedder !== "loading" && !input.building;
+    if (!input.supported) {
+        return {
+            state: "unsupported",
+            label: "Not available here",
+            detail:
+                "This index was built with a model the plugin cannot run. Keyword search and " +
+                "related notes still work.",
+            model,
+            canDelete,
+        };
+    }
+    if (input.error !== null) {
+        return { state: "failed", label: "Failed to load", detail: input.error, model, canDelete };
+    }
+    if (input.embedder === "loading") {
+        return { state: "loading", label: "Loading…", detail: "Downloading or starting the model.", model, canDelete };
+    }
+    const where = `${mb(held)} on this device`;
+    if (input.embedder === "ready") {
+        return { state: "ready", label: "Loaded", detail: `${where} · in use`, model, canDelete };
+    }
+    if (input.complete) {
+        return { state: "downloaded", label: "Downloaded", detail: where, model, canDelete };
+    }
+    return {
+        state: "absent",
+        label: "Not downloaded",
+        detail: `${mb(input.downloadBytes)} on first use, after asking.` + (held > 0 ? ` ${mb(held)} partly downloaded.` : ""),
+        model,
+        canDelete,
+    };
+}

@@ -45,7 +45,8 @@ import { LexicalSearchModal, RelatedModal, SemanticSearchModal, type Display } f
 import { queryModelFor } from "./models.js";
 import { withPresets } from "./ranking.js";
 import { DEFAULT_SETTINGS, GnosisSettingTab, type GnosisSettings } from "./settings.js";
-import { indexStatus, type IndexStatus } from "./status.js";
+import { BrowserModelStore, type ModelStore } from "./model-store.js";
+import { indexStatus, modelStatus, type IndexStatus, type ModelStatus } from "./status.js";
 import type { Hit, IndexInfo, SpaceInfo } from "./types.js";
 
 /** An embedder for one model, from the moment it starts loading. */
@@ -73,14 +74,21 @@ export default class GnosisPlugin extends Plugin {
     /** Where an unfinished build keeps its progress; per device, never synced. */
     checkpoints: CheckpointStore = new IndexedDbCheckpoints();
     checkpointEveryMs = 60_000;
+    /** What this device holds of a model; tests replace Cache Storage. */
+    modelStore: ModelStore = new BrowserModelStore();
+    /** Asked before deleting the model. */
+    confirmDelete: (lines: string[]) => Promise<boolean> = (lines) =>
+        confirm(this.app, "Delete the model from this device?", lines, "Delete");
     isMobile = (): boolean => Platform.isMobile;
 
     private building: AbortController | null = null;
+    /** Why the model last failed to load, until it is tried again. */
+    private embedderError: string | null = null;
     /** The build's latest report, for the settings tab's card. */
     private buildProgress: BuildProgress | null = null;
     private status: HTMLElement | null = null;
     /** Whoever is showing the index's state: the settings tab, while open. */
-    private readonly statusListeners = new Set<() => void>();
+    private readonly statusListeners = new Set<(progressOnly: boolean) => void>();
 
     override async onload(): Promise<void> {
         await this.loadSettings();
@@ -324,11 +332,14 @@ export default class GnosisPlugin extends Plugin {
         );
         const state: EmbedderState = { key, starting, ready: null };
         this.embedder = state;
+        this.embedderError = null;
+        this.statusChanged();
         starting.then(
             (embedder) => {
                 progress.hide();
                 if (this.embedder === state) {
                     state.ready = embedder;
+                    this.statusChanged();
                 } else {
                     // Turned off, or replaced by another index's model, while
                     // it was still loading.
@@ -339,6 +350,8 @@ export default class GnosisPlugin extends Plugin {
                 progress.hide();
                 if (this.embedder === state) {
                     this.embedder = null;
+                    this.embedderError = describe(error);
+                    this.statusChanged();
                 }
                 new Notice(`Gnosis: could not load the model — ${describe(error)}`, 10_000);
             },
@@ -349,6 +362,85 @@ export default class GnosisPlugin extends Plugin {
     private stopEmbedder(): void {
         this.embedder?.ready?.dispose();
         this.embedder = null;
+        this.statusChanged();
+    }
+
+    /**
+     * The model this vault's search uses: the live index's, or, with no
+     * index yet, the one "Build index" would use.
+     */
+    private async currentModel(): Promise<{ id: string; dim: number }> {
+        const path = join(this.settings.artifactDir, MANIFEST_NAME);
+        try {
+            if (await this.app.vault.adapter.exists(path)) {
+                const manifest = JSON.parse(await this.app.vault.adapter.read(path)) as {
+                    spaces: { space: string; model: { id: string; dim: number } }[];
+                };
+                const text = manifest.spaces.find((s) => s.space === "text");
+                if (text !== undefined) {
+                    return { id: text.model.id, dim: text.model.dim };
+                }
+            }
+        } catch {
+            // An unreadable manifest is the index card's to report.
+        }
+        const id = this.settings.buildModel;
+        return { id, dim: queryModelFor(id)?.dim ?? 0 };
+    }
+
+    /** Everything the settings tab's model card shows. */
+    async modelStatus(): Promise<ModelStatus> {
+        const { id, dim } = await this.currentModel();
+        const model = queryModelFor(id);
+        const held = model === null ? null : await this.modelStore.held(model, RUNTIME.url).catch(() => null);
+        return modelStatus({
+            modelId: id,
+            dim,
+            supported: model !== null,
+            heldBytes: held === null ? null : held.modelBytes + held.runtimeBytes,
+            complete: held?.modelComplete ?? false,
+            downloadBytes: (model?.downloadBytes ?? 0) + RUNTIME.bytes,
+            embedder: this.embedder === null ? null : this.embedder.ready === null ? "loading" : "ready",
+            error: this.embedderError,
+            building: this.building !== null,
+        });
+    }
+
+    /**
+     * Remove the model and the runtime from this device, after asking.
+     *
+     * Semantic search goes off with it: leaving it on would download the
+     * model again on the next search, which is not what deleting means. The
+     * index is untouched, and keyword search and related notes keep working.
+     */
+    async deleteModel(): Promise<void> {
+        if (this.building !== null) {
+            new Notice("Gnosis: an index build is using the model — cancel it first");
+            return;
+        }
+        const { id } = await this.currentModel();
+        const model = queryModelFor(id);
+        if (model === null) {
+            return;
+        }
+        const agreed = await this.confirmDelete([
+            `This removes ${id} and ONNX Runtime from this device. Your index is not affected, and ` +
+                "keyword search and related notes keep working.",
+            "Semantic search is turned off. Turning it back on, or building an index, downloads the " +
+                "model again. Another plugin that uses the same model downloads it again too.",
+        ]);
+        if (!agreed) {
+            return;
+        }
+        this.stopEmbedder();
+        this.embedderError = null;
+        if (this.settings.semanticSearch) {
+            this.settings.semanticSearch = false;
+            await this.saveSettings();
+        }
+        const freed = await this.modelStore.remove(model, RUNTIME.url);
+        new Notice(`Gnosis: deleted the model — ${megabytes(freed)} freed`);
+        this.statusChanged();
     }
 
     private async openRelated(file: TFile): Promise<void> {
@@ -435,15 +527,19 @@ export default class GnosisPlugin extends Plugin {
         new Notice("Gnosis: canceling — finishing the batch in flight…");
     }
 
-    /** Be told whenever the index's state may have changed. Returns the unsubscribe. */
-    onStatusChange(listener: () => void): () => void {
+    /**
+     * Be told whenever the index's or the model's state may have changed.
+     * `progressOnly` marks a build's progress tick, which changes nothing but
+     * the build's numbers. Returns the unsubscribe.
+     */
+    onStatusChange(listener: (progressOnly: boolean) => void): () => void {
         this.statusListeners.add(listener);
         return () => this.statusListeners.delete(listener);
     }
 
-    private statusChanged(): void {
+    private statusChanged(progressOnly = false): void {
         for (const listener of this.statusListeners) {
-            listener();
+            listener(progressOnly);
         }
     }
 
@@ -552,7 +648,7 @@ export default class GnosisPlugin extends Plugin {
             onProgress: (progress: BuildProgress) => {
                 this.buildProgress = progress;
                 this.status?.setText(statusLine(progress));
-                this.statusChanged();
+                this.statusChanged(true);
             },
             now: () => Date.now(),
             yieldToUi: () => new Promise((resolve) => setTimeout(resolve, 0)),

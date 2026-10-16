@@ -7,7 +7,7 @@ import type { App, PaneType } from "obsidian";
 import type GnosisPlugin from "./main.js";
 import { DEFAULT_BUILD_MODEL, QUERY_MODELS } from "./models.js";
 import type { Strategy, TitleBonus } from "./ranking.js";
-import type { IndexStatus } from "./status.js";
+import type { IndexStatus, ModelStatus } from "./status.js";
 import { segmented } from "./ui/segmented.js";
 
 export interface GnosisSettings {
@@ -75,6 +75,7 @@ export class GnosisSettingTab extends PluginSettingTab {
     private unsubscribe: (() => void) | null = null;
     /** Bumped per refresh, so a slow read never overwrites a newer one. */
     private ticket = 0;
+    private modelTicket = 0;
 
     constructor(
         app: App,
@@ -90,17 +91,28 @@ export class GnosisSettingTab extends PluginSettingTab {
 
         this.heading(containerEl, "Index");
         const card = containerEl.createDiv({ cls: "gnosis-card gnosis-index-card" });
-        const refresh = () => {
+        // Filled in below; `refresh` redraws both cards whenever the plugin
+        // says the index or the model may have changed.
+        let modelCard: HTMLElement | null = null;
+        const refresh = (progressOnly = false) => {
             const ticket = ++this.ticket;
-            void this.plugin.indexStatus().then((status) => {
+            void this.plugin.indexStatus().then((index) => {
                 if (ticket === this.ticket) {
-                    this.renderIndexCard(card, status);
+                    this.renderIndexCard(card, index);
                 }
             });
+            // A build's progress tick changes only the index card's numbers;
+            // the model card reads Cache Storage, which is not worth redoing
+            // every batch.
+            if (!progressOnly) {
+                const modelTicket = ++this.modelTicket;
+                void this.plugin.modelStatus().then((model) => {
+                    if (modelTicket === this.modelTicket && modelCard !== null) {
+                        this.renderModelCard(modelCard, model);
+                    }
+                });
+            }
         };
-        this.unsubscribe?.();
-        this.unsubscribe = this.plugin.onStatusChange(refresh);
-        refresh();
 
         containerEl.createEl("p", {
             cls: "gnosis-note",
@@ -276,6 +288,7 @@ export class GnosisSettingTab extends PluginSettingTab {
             );
 
         this.heading(containerEl, "Model");
+        modelCard = containerEl.createDiv({ cls: "gnosis-card gnosis-model-card" });
 
         this.card(new Setting(containerEl))
             .setName("Semantic search")
@@ -295,13 +308,25 @@ export class GnosisSettingTab extends PluginSettingTab {
                 }),
             );
 
+        this.card(new Setting(containerEl))
+            .setName("Runs on")
+            .setDesc(
+                "The CPU, through WebAssembly, on this device. Graphics-card acceleration " +
+                    "(WebGPU) is not supported yet.",
+            );
+
         this.footer(containerEl);
+
+        this.unsubscribe?.();
+        this.unsubscribe = this.plugin.onStatusChange(refresh);
+        refresh();
     }
 
     override hide(): void {
         this.unsubscribe?.();
         this.unsubscribe = null;
         this.ticket++;
+        this.modelTicket++;
     }
 
     private async saveRanking(): Promise<void> {
@@ -407,6 +432,25 @@ export class GnosisSettingTab extends PluginSettingTab {
                 void this.plugin.buildIndex();
             }
         });
+    }
+
+    private renderModelCard(card: HTMLElement, status: ModelStatus): void {
+        card.empty();
+        card.dataset["state"] = status.state;
+        const words = card.createDiv({ cls: "gnosis-model-words" });
+        words.createDiv({ cls: "gnosis-model-name", text: "Embedding model" });
+        const state = words.createDiv({ cls: "gnosis-index-state gnosis-model-state" });
+        state.createSpan({ cls: "gnosis-dot" });
+        state.createSpan({ text: `${status.label} · ${status.detail}` });
+        words.createDiv({ cls: "gnosis-index-meta", text: status.model });
+
+        if (status.canDelete) {
+            const button = card.createEl("button", { text: "Delete", cls: "mod-warning" });
+            // Deleting turns semantic search off, so the whole tab is redrawn.
+            button.addEventListener("click", () => {
+                void this.plugin.deleteModel().then(() => this.display());
+            });
+        }
     }
 
     private footer(containerEl: HTMLElement): void {

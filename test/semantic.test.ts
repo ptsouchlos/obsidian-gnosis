@@ -16,7 +16,9 @@ import { App, notices, openedModals } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
 import { consentLines, type Download } from "../src/consent.js";
 import { queryVectors, unsupportedReason, type EmbedderFactory, type TextEmbedder } from "../src/embedder.js";
+import { MemoryModelStore } from "../src/model-store.js";
 import type { QueryModel } from "../src/models.js";
+import { modelStatus } from "../src/status.js";
 import type { Hit, SpaceInfo } from "../src/types.js";
 
 declare const GNOSIS_TEST_VAULT: string;
@@ -253,4 +255,86 @@ test("the consent prompt promises nothing leaves the device and states the total
     assert.match(lines[0]!, /148 MB in all/);
     assert.ok(lines.some((l) => l.includes("134 MB from huggingface.co")));
     assert.ok(lines.some((l) => l.includes("never leave this device")));
+});
+
+// The settings tab's model card: what this device holds, and deleting it.
+
+test("the model card says what is downloaded, and what a first use costs", async () => {
+    const { plugin } = await load({});
+    const store = new MemoryModelStore();
+    plugin.modelStore = store;
+
+    const before = await plugin.modelStatus();
+    assert.equal(before.state, "absent");
+    assert.equal(before.model, "bge-small-en-v1.5 · 4d", "the index's own model, not the setting's");
+    assert.match(before.detail, /on first use, after asking/);
+    assert.equal(before.canDelete, false, "nothing to delete");
+
+    store.held_.add("Xenova/bge-small-en-v1.5");
+    assert.equal((await plugin.modelStatus()).state, "downloaded");
+
+    assert.equal(await plugin.enableSemanticSearch(), true);
+    const loaded = await plugin.modelStatus();
+    assert.equal(loaded.state, "ready");
+    assert.match(loaded.detail, /MB on this device · in use/);
+    assert.equal(loaded.canDelete, true);
+});
+
+test("deleting the model asks, turns semantic search off, and frees only its files", async () => {
+    const embedder = new StandIn([1, 0, 0, 0]);
+    const { plugin } = await load({ embedder });
+    const store = new MemoryModelStore();
+    store.held_.add("Xenova/bge-small-en-v1.5");
+    store.held_.add("someone-elses/model");
+    plugin.modelStore = store;
+    await plugin.enableSemanticSearch();
+
+    let asked: string[] = [];
+    plugin.confirmDelete = async (lines) => {
+        asked = lines;
+        return false;
+    };
+    await plugin.deleteModel();
+    assert.ok(asked.some((l) => l.includes("index is not affected")), JSON.stringify(asked));
+    assert.equal(plugin.settings.semanticSearch, true, "declining changes nothing");
+    assert.equal(store.held_.has("Xenova/bge-small-en-v1.5"), true);
+
+    plugin.confirmDelete = async () => true;
+    await plugin.deleteModel();
+    assert.equal(plugin.settings.semanticSearch, false, "or the next search would download it again");
+    assert.equal(embedder.disposed, true);
+    assert.deepEqual([...store.held_], ["someone-elses/model"], "another plugin's model is left alone");
+    assert.ok(notices.some((n) => n.includes("MB freed")), JSON.stringify(notices));
+    assert.equal((await plugin.modelStatus()).state, "absent");
+});
+
+test("a model that fails to load shows why on the card", async () => {
+    const { plugin } = await load({
+        factory: async () => {
+            throw new Error("HTTP 503 from huggingface.co");
+        },
+    });
+    plugin.modelStore = new MemoryModelStore();
+    await plugin.enableSemanticSearch().catch(() => false);
+    await waitFor("the failure", () => notices.some((n) => n.includes("could not load")));
+    const status = await plugin.modelStatus();
+    assert.equal(status.state, "failed");
+    assert.match(status.detail, /HTTP 503/);
+});
+
+test("an index built with a model the plugin cannot run says so on the card", () => {
+    const status = modelStatus({
+        modelId: "all-MiniLM-L6-v2",
+        dim: 384,
+        supported: false,
+        heldBytes: null,
+        complete: false,
+        downloadBytes: 0,
+        embedder: null,
+        error: null,
+        building: false,
+    });
+    assert.equal(status.state, "unsupported");
+    assert.match(status.detail, /Keyword search and related notes still work/);
+    assert.equal(status.canDelete, false);
 });

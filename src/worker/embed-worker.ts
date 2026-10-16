@@ -13,12 +13,10 @@
 //! and nothing here sends anything anywhere.
 
 import "./web-env.js";
+import { RUNTIME_CACHE } from "../model-store.js";
 import { env, pipeline } from "@huggingface/transformers";
 import type { FeatureExtractionPipeline } from "@huggingface/transformers";
 import type { Done, LoadRequest, Progress, Request, Response, RuntimeSpec } from "./protocol.js";
-
-/** Where verified runtime bytes are kept, so a second session downloads nothing. */
-const RUNTIME_CACHE = "gnosis-onnxruntime";
 
 interface Loaded {
     extractor: FeatureExtractionPipeline;
@@ -97,7 +95,12 @@ async function runtimeBinary(runtime: RuntimeSpec, onProgress: (p: Progress) => 
         );
     }
     if (!cached) {
-        await cache.put(runtime.url, new globalThis.Response(bytes));
+        // With its length, so the settings tab can say how much is held
+        // without reading 14 MB to find out.
+        await cache.put(
+            runtime.url,
+            new globalThis.Response(bytes, { headers: { "content-length": String(bytes.byteLength) } }),
+        );
     }
     return bytes;
 }
