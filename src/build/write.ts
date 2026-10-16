@@ -95,3 +95,53 @@ export async function writeArtifact(adapter: DataAdapter, dir: string, artifact:
     }
     return result;
 }
+
+/**
+ * Move the artifact from one folder to another, without a moment where
+ * neither holds a working index.
+ *
+ * Copied, not renamed: shards first and the manifest last, as a build
+ * writes them, so a syncer or a reader never sees a manifest naming shards
+ * that are not there yet. The caller verifies the copy opens before calling
+ * `removeArtifact` on the old one.
+ */
+export async function copyArtifact(adapter: DataAdapter, from: string, to: string): Promise<void> {
+    const manifestPath = join(from, MANIFEST_NAME);
+    const manifest = parseManifest(await adapter.read(manifestPath), manifestPath);
+    if (await adapter.exists(join(to, MANIFEST_NAME))) {
+        throw new Error(`there is already an index in ${to}`);
+    }
+    if (!(await adapter.exists(to))) {
+        await adapter.mkdir(to);
+    }
+    for (const shard of manifest.shards) {
+        await adapter.copy(join(from, shard.name), join(to, shard.name));
+    }
+    await adapter.copy(manifestPath, join(to, MANIFEST_NAME));
+}
+
+/**
+ * Remove an artifact: its manifest first, so nothing reads a half-removed
+ * index, then its shards, then the folder if nothing else is in it. A parent
+ * like `.gnosis/` is left alone — the CLI keeps its database there.
+ */
+export async function removeArtifact(adapter: DataAdapter, dir: string): Promise<void> {
+    const manifestPath = join(dir, MANIFEST_NAME);
+    if (!(await adapter.exists(manifestPath))) {
+        return;
+    }
+    const manifest = parseManifest(await adapter.read(manifestPath), manifestPath);
+    await adapter.remove(manifestPath);
+    for (const shard of manifest.shards) {
+        const path = join(dir, shard.name);
+        if (await adapter.exists(path)) {
+            await adapter.remove(path);
+        }
+    }
+    const left = await adapter.list(dir);
+    if (left.files.length === 0 && left.folders.length === 0) {
+        // `recursive`, though it is empty: the desktop adapter's
+        // non-recursive form is a plain `rm`, which refuses any directory.
+        await adapter.rmdir(dir, true);
+    }
+}

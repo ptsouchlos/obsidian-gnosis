@@ -413,3 +413,69 @@ test("the index card names a manifest it cannot read", async () => {
     assert.match(status.detail, /manifest\.json is not valid JSON/);
     assert.equal(status.action, "build");
 });
+
+// Step 6: what a build leaves out, and where the index lives.
+
+test("notes in Obsidian's excluded files are left out of a build, unless the reader says not to", async () => {
+    const root = vaultCopy({ artifact: false });
+    const { plugin, app } = await load(root);
+    app.excluded.push("notes/sourdough");
+    await plugin.buildIndex();
+    assert.equal((await info(root)).documents, 1, "only hydration.md");
+
+    const again = await load(root);
+    again.app.excluded.push("notes/sourdough");
+    again.app.local.set(...([...app.local][0]!));
+    again.plugin.settings.honorExcluded = false;
+    await again.plugin.buildIndex();
+    assert.equal((await info(root)).documents, 2);
+});
+
+test("moving the index copies it, checks it opens, and only then removes the old one", async () => {
+    const root = vaultCopy({ artifact: true });
+    const before = shardBytes(root);
+    const { plugin } = await load(root);
+    assert.equal(await plugin.moveIndex("Gnosis Index"), true);
+
+    assert.equal(plugin.settings.artifactDir, "Gnosis Index");
+    assert.ok(!existsSync(join(root, ARTIFACT)), "the old folder is gone");
+    assert.ok(existsSync(join(root, ".gnosis")), "but not its parent, where the CLI keeps its database");
+    assert.ok(readFileSync(join(root, "Gnosis Index/shard-0000.bin")).equals(before), "byte for byte");
+    const status = await plugin.indexStatus();
+    assert.equal(status.state, "ready");
+    assert.equal(status.notes, 4);
+});
+
+test("moving onto a folder that already holds an index is refused, and touches neither", async () => {
+    const root = vaultCopy({ artifact: true });
+    cpSync(join(root, ARTIFACT), join(root, "Gnosis Index"), { recursive: true });
+    const { plugin, app } = await load(root);
+    assert.equal(await plugin.moveIndex("Gnosis Index"), false);
+    assert.equal(plugin.settings.artifactDir, ARTIFACT);
+    assert.deepEqual(app.vault.adapter.writes, [], "nothing written or removed");
+    assert.ok(notices.some((n) => n.includes("already an index in Gnosis Index")), JSON.stringify(notices));
+});
+
+test("with no index yet, moving only changes where the next build writes", async () => {
+    const root = vaultCopy({ artifact: false });
+    const { plugin, app } = await load(root);
+    assert.equal(await plugin.moveIndex("Gnosis Index"), true);
+    assert.deepEqual(app.vault.adapter.writes, []);
+    await plugin.buildIndex();
+    assert.ok(existsSync(join(root, "Gnosis Index/manifest.json")));
+});
+
+test("a move whose copy does not open leaves the original and no half-copy", async () => {
+    const root = vaultCopy({ artifact: true });
+    // A shard that no longer matches its manifest: the copy fails to verify.
+    const shard = join(root, ARTIFACT, "shard-0000.bin");
+    const corrupt = Buffer.from(readFileSync(shard));
+    corrupt[corrupt.length - 1]! ^= 0xff;
+    writeFileSync(shard, corrupt);
+
+    const { plugin } = await load(root);
+    assert.equal(await plugin.moveIndex("Gnosis Index"), false);
+    assert.equal(plugin.settings.artifactDir, ARTIFACT);
+    assert.ok(readFileSync(shard).equals(corrupt), "the original is exactly as it was");
+    assert.ok(!existsSync(join(root, "Gnosis Index")), "and the copy is gone");
+});

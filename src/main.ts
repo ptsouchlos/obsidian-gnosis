@@ -30,7 +30,7 @@ import {
 import { IndexedDbCheckpoints, type CheckpointStore } from "./build/checkpoints.js";
 import { runBuild, type BuildProgress, type BuildSpec, type Note } from "./build/job.js";
 import { replaceWarning, specForNewIndex, specFromManifest, statusLine } from "./build/plan.js";
-import { manifestHash, writeArtifact } from "./build/write.js";
+import { copyArtifact, manifestHash, removeArtifact, writeArtifact } from "./build/write.js";
 import { askConsent, confirm, downloadsFor, megabytes, type Download } from "./consent.js";
 import {
     RUNTIME,
@@ -705,13 +705,80 @@ export default class GnosisPlugin extends Plugin {
         );
     }
 
-    /** Every markdown note, read lazily: most of an incremental build is reused. */
+    /**
+     * Every markdown note, read lazily: most of an incremental build is
+     * reused. Notes Obsidian's "Excluded files" covers are left out unless the
+     * reader says otherwise, so an archive they hid from Obsidian's search
+     * stays out of this one too.
+     */
     private notes(): Note[] {
-        return this.app.vault.getMarkdownFiles().map((file) => ({
+        // Obsidian's own matcher, not public API: without it, nothing is
+        // excluded rather than anything guessed.
+        const ignored = (this.app.metadataCache as { isUserIgnored?: (path: string) => boolean }).isUserIgnored;
+        const skip = (path: string) =>
+            this.settings.honorExcluded && typeof ignored === "function" && ignored.call(this.app.metadataCache, path);
+        return this.app.vault
+            .getMarkdownFiles()
+            .filter((file) => !skip(file.path))
+            .map((file) => ({
             path: file.path,
             mtime: file.stat.mtime,
             read: () => this.app.vault.cachedRead(file),
         }));
+    }
+
+    /**
+     * Move the index to another folder, keeping a working one throughout:
+     * copy, check the copy opens, and only then remove the original. With no
+     * index yet, only the setting changes.
+     */
+    async moveIndex(to: string): Promise<boolean> {
+        const from = this.settings.artifactDir;
+        if (to === from) {
+            return true;
+        }
+        if (this.building !== null) {
+            new Notice("Gnosis: an index build is running — move the index once it finishes");
+            return false;
+        }
+        const adapter = this.app.vault.adapter;
+        if (await adapter.exists(join(to, MANIFEST_NAME))) {
+            // Someone else's index, perhaps the CLI's: never overwritten, and
+            // never cleaned up below as if this move had made it.
+            new Notice(`Gnosis: there is already an index in ${to} — remove it or choose another folder`, 10_000);
+            return false;
+        }
+        if (await adapter.exists(join(from, MANIFEST_NAME))) {
+            try {
+                await copyArtifact(adapter, from, to);
+                (await openArtifact(this.app, to)).free();
+            } catch (error) {
+                // Leave the original exactly as it was, and no half-copy.
+                await removeArtifact(adapter, to).catch(() => {});
+                new Notice(`Gnosis: could not move the index to ${to} — ${describe(error)}`, 10_000);
+                return false;
+            }
+        }
+        // The verified copy is the index from here on, so the setting moves
+        // before anything is removed: a failed cleanup leaves a stray old
+        // copy, never a setting pointing at nothing.
+        this.settings.artifactDir = to;
+        await this.saveSettings();
+        this.closeIndex();
+        this.statusChanged();
+        if (await adapter.exists(join(from, MANIFEST_NAME))) {
+            try {
+                await removeArtifact(adapter, from);
+                new Notice(`Gnosis: moved the index to ${to}`);
+            } catch (error) {
+                new Notice(
+                    `Gnosis: moved the index to ${to}, but could not remove the old copy in ${from} — ` +
+                        `${describe(error)}. It is safe to delete.`,
+                    10_000,
+                );
+            }
+        }
+        return true;
     }
 
     /** The manifest hash this device last wrote, if any. */

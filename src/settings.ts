@@ -46,7 +46,21 @@ export interface GnosisSettings {
     keyboardHints: boolean;
     /** Each result's score beside its title. */
     showScores: boolean;
+    /** Leave out what Obsidian's "Excluded files" leaves out, when building. */
+    honorExcluded: boolean;
 }
+
+/**
+ * The two index locations the settings offer by name.
+ *
+ * Hidden is where the gnosis CLI writes. Obsidian Sync skips every folder
+ * whose name starts with a dot, except the config folder, so a reader who
+ * syncs with it needs the index in a visible folder instead.
+ */
+export const INDEX_LOCATIONS = {
+    hidden: ".gnosis/artifact",
+    visible: "Gnosis Index",
+} as const;
 
 export const DEFAULT_SETTINGS: GnosisSettings = {
     artifactDir: ".gnosis/artifact",
@@ -58,6 +72,7 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     modOpen: "tab",
     keyboardHints: true,
     showScores: false,
+    honorExcluded: true,
 };
 
 /** Where the footer's links go. */
@@ -121,14 +136,51 @@ export class GnosisSettingTab extends PluginSettingTab {
                 "tablet, build on a computer and let your sync bring the finished index over.",
         });
 
+        const dir = this.plugin.settings.artifactDir;
+        const location = this.card(new Setting(containerEl))
+            .setName("Index location")
+            .setDesc(
+                createFragment((f) => {
+                    f.appendText("Where the index lives in this vault, and so what syncs it.");
+                    const list = f.createEl("ul");
+                    list.createEl("li").append(
+                        createEl("strong", { text: "Hidden: " }),
+                        `${INDEX_LOCATIONS.hidden}, where the gnosis CLI writes. Syncs with iCloud, Dropbox, Syncthing or git.`,
+                    );
+                    list.createEl("li").append(
+                        createEl("strong", { text: "Vault folder: " }),
+                        `a visible "${INDEX_LOCATIONS.visible}" folder. Choose this for Obsidian Sync, which skips ` +
+                            `hidden folders, and turn on its "Sync all other types", or the index files are skipped too.`,
+                    );
+                    f.appendText("Changing it moves the index; nothing is rebuilt.");
+                }),
+            );
+        segmented<"hidden" | "visible" | "custom">(
+            location.controlEl,
+            "Index location",
+            [
+                { value: "hidden", label: "Hidden" },
+                { value: "visible", label: "Vault folder" },
+            ],
+            dir === INDEX_LOCATIONS.hidden ? "hidden" : dir === INDEX_LOCATIONS.visible ? "visible" : "custom",
+            async (value) => {
+                if (value !== "custom") {
+                    await this.plugin.moveIndex(INDEX_LOCATIONS[value]);
+                }
+                // Moved or refused, the tab redraws from what is true now.
+                this.display();
+            },
+        );
+
         const advanced = containerEl.createEl("details", { cls: "gnosis-advanced" });
         advanced.createEl("summary", { text: "Advanced" });
 
         this.card(new Setting(advanced))
             .setName("Index folder")
             .setDesc(
-                "Vault-relative folder holding the index: a manifest.json and its shards. " +
-                    "The gnosis CLI writes it with `gnosis export --out <folder>`.",
+                "Read the index from another folder, e.g. one the gnosis CLI wrote with " +
+                    "`gnosis export --out <folder>`. This points at the folder; it does not move " +
+                    "an index there.",
             )
             .addText((text) =>
                 text
@@ -142,6 +194,19 @@ export class GnosisSettingTab extends PluginSettingTab {
                         this.plugin.closeIndex();
                         refresh();
                     }),
+            );
+
+        this.card(new Setting(advanced))
+            .setName("Honor excluded files")
+            .setDesc(
+                "Leave out notes in Settings → Files and links → Excluded files (an archive, " +
+                    "say), as Obsidian's own search does. Takes effect on the next build.",
+            )
+            .addToggle((toggle) =>
+                toggle.setValue(this.plugin.settings.honorExcluded).onChange(async (on) => {
+                    this.plugin.settings.honorExcluded = on;
+                    await this.plugin.saveSettings();
+                }),
             );
 
         this.card(new Setting(advanced))
