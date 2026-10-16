@@ -8,7 +8,7 @@
 //! Everything the real API does that cannot be faked here — rendering,
 //! editors, syncing — the plugin does not do.
 
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 
@@ -57,6 +57,27 @@ class StubAdapter {
     async remove(path: string): Promise<void> {
         this.writes.push(`-${path}`);
         await rm(join(this.root, path));
+    }
+
+    async copy(from: string, to: string): Promise<void> {
+        this.writes.push(to);
+        await copyFile(join(this.root, from), join(this.root, to));
+    }
+
+    async list(path: string): Promise<{ files: string[]; folders: string[] }> {
+        const files: string[] = [];
+        const folders: string[] = [];
+        for (const entry of readdirSync(join(this.root, path), { withFileTypes: true })) {
+            (entry.isDirectory() ? folders : files).push(`${path}/${entry.name}`);
+        }
+        return { files, folders };
+    }
+
+    async rmdir(path: string, recursive: boolean): Promise<void> {
+        this.writes.push(`-${path}/`);
+        // As Obsidian's desktop adapter does: without `recursive` it is a
+        // plain `rm`, which refuses a directory even when it is empty.
+        await rm(join(this.root, path), { recursive });
     }
 }
 
@@ -128,6 +149,11 @@ class StubWorkspace {
 export class App {
     readonly vault: StubVault;
     readonly workspace = new StubWorkspace();
+    /** Obsidian's "Excluded files", as path prefixes; the real one compiles patterns. */
+    readonly excluded: string[] = [];
+    readonly metadataCache = {
+        isUserIgnored: (path: string): boolean => this.excluded.some((prefix) => path.startsWith(prefix)),
+    };
     /** Obsidian's per-vault, per-device `localStorage`. */
     readonly local = new Map<string, unknown>();
 
