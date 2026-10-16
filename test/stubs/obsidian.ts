@@ -280,6 +280,7 @@ export function setIcon(_el: unknown, _icon: string): void {}
 
 export class Setting {
     readonly settingEl = { addClass(_cls: string): void {} };
+    readonly controlEl = {} as HTMLElement;
     constructor(_containerEl: unknown) {}
     setName(_name: string): this {
         return this;
