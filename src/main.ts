@@ -10,12 +10,19 @@
 //! work from the artifact alone. Semantic search embeds the query with the
 //! index's own model, which the reader has to agree to download first; the
 //! model runs in a worker, and only the query text crosses to it.
+//!
+//! Building an index uses the same model and the same consent, and gnosis's
+//! own `Builder` for everything the index contains — see `build/job.ts`.
 
-import { Notice, Plugin } from "obsidian";
+import { Notice, Platform, Plugin } from "obsidian";
 import type { TFile } from "obsidian";
 import type { Index } from "../vendor/gnosis-wasm/gnosis_wasm.js";
-import { ArtifactMissing, openArtifact } from "./artifact.js";
-import { askConsent, downloadsFor, megabytes, type Download } from "./consent.js";
+import { ArtifactMissing, openArtifact, readArtifact, startWasm, type RawArtifact } from "./artifact.js";
+import { IndexedDbCheckpoints, type CheckpointStore } from "./build/checkpoints.js";
+import { runBuild, type BuildProgress, type BuildSpec, type Note } from "./build/job.js";
+import { replaceWarning, specForNewIndex, specFromManifest, statusLine } from "./build/plan.js";
+import { manifestHash, writeArtifact } from "./build/write.js";
+import { askConsent, confirm, downloadsFor, megabytes, type Download } from "./consent.js";
 import {
     RUNTIME,
     queryVectors,
@@ -49,6 +56,16 @@ export default class GnosisPlugin extends Plugin {
     /** How the reader is asked; tests answer for them. */
     askConsent: (downloads: Download[]) => Promise<boolean> = (downloads) =>
         askConsent(this.app, downloads);
+    /** Asked before replacing an index this device did not write. */
+    confirmReplace: (lines: string[]) => Promise<boolean> = (lines) =>
+        confirm(this.app, "Replace the existing index?", lines, "Build and replace");
+    /** Where an unfinished build keeps its progress; per device, never synced. */
+    checkpoints: CheckpointStore = new IndexedDbCheckpoints();
+    checkpointEveryMs = 60_000;
+    isMobile = (): boolean => Platform.isMobile;
+
+    private building: AbortController | null = null;
+    private status: HTMLElement | null = null;
 
     override async onload(): Promise<void> {
         await this.loadSettings();
@@ -78,6 +95,29 @@ export default class GnosisPlugin extends Plugin {
         });
 
         this.addCommand({
+            id: "build-index",
+            name: "Build index",
+            callback: () => {
+                void this.buildIndex();
+            },
+        });
+
+        this.addCommand({
+            id: "cancel-build",
+            name: "Cancel index build",
+            checkCallback: (checking) => {
+                if (this.building === null) {
+                    return false;
+                }
+                if (!checking) {
+                    this.building.abort();
+                    new Notice("gnosis: canceling — finishing the batch in flight…");
+                }
+                return true;
+            },
+        });
+
+        this.addCommand({
             id: "index-info",
             name: "Show index info",
             callback: () => {
@@ -89,6 +129,8 @@ export default class GnosisPlugin extends Plugin {
     }
 
     override onunload(): void {
+        // A build in flight checkpoints on its way out, so the next one resumes.
+        this.building?.abort();
         this.stopEmbedder();
         this.closeIndex();
     }
@@ -111,7 +153,8 @@ export default class GnosisPlugin extends Plugin {
         } catch (error) {
             if (error instanceof ArtifactMissing) {
                 new Notice(
-                    `gnosis: no index in ${this.settings.artifactDir}. Build one with\n` +
+                    `gnosis: no index in ${this.settings.artifactDir} yet. Run "Build index" to ` +
+                        `build one here, or with the gnosis CLI:\n` +
                         `  gnosis export --out ${this.settings.artifactDir}`,
                     10_000,
                 );
@@ -228,7 +271,7 @@ export default class GnosisPlugin extends Plugin {
 
     /** Start (or reuse) the embedder for `space`'s model, reporting the download. */
     private startEmbedder(space: SpaceInfo): Promise<TextEmbedder> {
-        const key = `${space.queryModel}/${space.pooling}`;
+        const key = embedderKey(space);
         if (this.embedder?.key === key) {
             return this.embedder.starting;
         }
@@ -310,6 +353,177 @@ export default class GnosisPlugin extends Plugin {
         return lines;
     }
 
+    /**
+     * Build or update the vault's index, here.
+     *
+     * Incremental whenever there is something to start from: an interrupted
+     * build's checkpoint first, else the live index. Only changed notes are
+     * embedded either way. The live index is replaced only by a build that
+     * completed, and only after the reader has agreed if another device or
+     * the CLI wrote it.
+     */
+    async buildIndex(): Promise<void> {
+        if (this.building !== null) {
+            new Notice("gnosis: an index build is already running");
+            return;
+        }
+        if (this.isMobile()) {
+            // Embedding a whole vault on a phone is a different proposition:
+            // build on a desktop, and let this device read the result.
+            new Notice("gnosis: building an index is desktop-only — build on a desktop and sync it here", 10_000);
+            return;
+        }
+        const controller = new AbortController();
+        this.building = controller;
+        try {
+            await this.runBuildCommand(controller.signal);
+        } catch (error) {
+            new Notice(`gnosis: the index build failed — ${describe(error)}. The existing index is unchanged.`, 10_000);
+        } finally {
+            this.building = null;
+            this.status?.remove();
+            this.status = null;
+        }
+    }
+
+    private async runBuildCommand(signal: AbortSignal): Promise<void> {
+        const dir = this.settings.artifactDir;
+        const vaultName = this.app.vault.getName();
+
+        let live: RawArtifact | null = null;
+        try {
+            live = await readArtifact(this.app, dir);
+        } catch (error) {
+            if (!(error instanceof ArtifactMissing)) {
+                throw error;
+            }
+        }
+
+        const planned = live === null
+            ? specForNewIndex(this.settings.buildModel, vaultName)
+            : specFromManifest(live.manifestJson, vaultName);
+        if ("refuse" in planned) {
+            new Notice(`gnosis: ${planned.refuse}`, 10_000);
+            return;
+        }
+        const spec = planned.spec;
+
+        const liveHash = live === null ? null : await manifestHash(live.manifestJson);
+        if (live !== null && liveHash !== this.lastWritten()) {
+            if (!(await this.confirmReplace(replaceWarning(live.manifestJson, vaultName)))) {
+                return;
+            }
+        }
+
+        const space = specSpace(spec);
+        const model = queryModelFor(spec.model)!;
+        const consented = this.settings.semanticSearch && this.embedder?.key === embedderKey(space);
+        if (!consented && !(await this.askConsent(downloadsFor(spec.model, model, RUNTIME)))) {
+            return;
+        }
+        const embedder = await this.startEmbedder(space);
+        await startWasm();
+
+        const vault = this.vaultKey();
+        const specKey = JSON.stringify(spec);
+        const saved = await this.checkpoints.load(vault);
+        const resuming = saved !== null && saved.specKey === specKey;
+        if (saved !== null && !resuming) {
+            await this.checkpoints.clear(vault);
+        }
+        if (resuming) {
+            new Notice("gnosis: resuming the interrupted index build");
+        }
+
+        this.status = this.addStatusBarItem();
+        this.status.setText("gnosis: indexing…");
+        const result = await runBuild({
+            spec,
+            notes: this.notes(),
+            base: resuming ? saved.artifact : live,
+            embed: (texts) => embedder.embed(texts),
+            checkpoint: (artifact) => this.checkpoints.save(vault, { specKey, artifact, savedAt: Date.now() }),
+            signal,
+            onProgress: (progress: BuildProgress) => this.status?.setText(statusLine(progress)),
+            now: () => Date.now(),
+            yieldToUi: () => new Promise((resolve) => setTimeout(resolve, 0)),
+            checkpointEveryMs: this.checkpointEveryMs,
+        });
+
+        if (result.canceled || result.artifact === null) {
+            new Notice(
+                "gnosis: index build canceled. The existing index is unchanged; " +
+                    `"Build index" picks up where this one stopped.`,
+                10_000,
+            );
+            return;
+        }
+
+        // The live index may have changed while this ran — the CLI, or a
+        // sync from another device. Replacing it then is the same question
+        // as before, asked again rather than assumed.
+        let current: RawArtifact | null = null;
+        try {
+            current = await readArtifact(this.app, dir);
+        } catch (error) {
+            if (!(error instanceof ArtifactMissing)) {
+                throw error;
+            }
+        }
+        const currentHash = current === null ? null : await manifestHash(current.manifestJson);
+        if (current !== null && currentHash !== liveHash && currentHash !== this.lastWritten()) {
+            if (!(await this.confirmReplace(replaceWarning(current.manifestJson, vaultName)))) {
+                return;
+            }
+        }
+
+        const written = await writeArtifact(this.app.vault.adapter, dir, result.artifact);
+        await this.checkpoints.clear(vault);
+        if (written.upToDate) {
+            new Notice(`gnosis: the index is already up to date — ${result.documents.toLocaleString()} notes`);
+            return;
+        }
+        this.app.saveLocalStorage(LAST_WRITTEN_KEY, await manifestHash(result.artifact.manifestJson));
+        this.closeIndex();
+
+        // The model is downloaded and consented to: search uses it from now on.
+        if (!this.settings.semanticSearch) {
+            this.settings.semanticSearch = true;
+            await this.saveSettings();
+        }
+        new Notice(
+            `gnosis: indexed ${result.documents.toLocaleString()} notes, ` +
+                `${result.chunks.toLocaleString()} chunks — ${result.chunksEmbedded.toLocaleString()} ` +
+                `embedded, ${result.notesReused.toLocaleString()} notes unchanged; ` +
+                `${written.written} of ${written.written + written.unchanged} shard(s) written.`,
+            10_000,
+        );
+    }
+
+    /** Every markdown note, read lazily: most of an incremental build is reused. */
+    private notes(): Note[] {
+        return this.app.vault.getMarkdownFiles().map((file) => ({
+            path: file.path,
+            mtime: file.stat.mtime,
+            read: () => this.app.vault.cachedRead(file),
+        }));
+    }
+
+    /** The manifest hash this device last wrote, if any. */
+    private lastWritten(): string | null {
+        const value: unknown = this.app.loadLocalStorage(LAST_WRITTEN_KEY);
+        return typeof value === "string" ? value : null;
+    }
+
+    /**
+     * Which vault checkpoints belong to. IndexedDB is shared by every vault
+     * Obsidian opens; `appId` is Obsidian's own per-vault id.
+     */
+    private vaultKey(): string {
+        const id = (this.app as unknown as { appId?: unknown }).appId;
+        return typeof id === "string" ? id : this.app.vault.getName();
+    }
+
     async loadSettings(): Promise<void> {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     }
@@ -317,6 +531,27 @@ export default class GnosisPlugin extends Plugin {
     async saveSettings(): Promise<void> {
         await this.saveData(this.settings);
     }
+}
+
+/** Where this device remembers the manifest it last wrote, in `localStorage`. */
+const LAST_WRITTEN_KEY = "gnosis-last-written-manifest";
+
+function embedderKey(space: SpaceInfo): string {
+    return `${space.queryModel}/${space.pooling}`;
+}
+
+/** The space a build will produce, in the shape the embedder is started from. */
+function specSpace(spec: BuildSpec): SpaceInfo {
+    return {
+        space: "text",
+        model: spec.model,
+        queryModel: spec.model,
+        pooling: spec.pooling,
+        queryPrefix: spec.queryPrefix,
+        documentPrefix: spec.documentPrefix,
+        dim: spec.dim,
+        chunks: 0,
+    };
 }
 
 /** An error's message, whatever shape it arrived in from WebAssembly. */

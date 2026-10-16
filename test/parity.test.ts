@@ -113,3 +113,139 @@ test("the plugin's model reproduces the vectors gnosis stored", options, async (
     assert.deepEqual(misses, [], "every chunk must find its own document at the top");
     assert.ok(lowest > 0.9999, `a re-embedded chunk should match its stored vector, got ${lowest}`);
 });
+
+/**
+ * Does an index the plugin builds match the one the CLI built from the same
+ * vault?
+ *
+ * The vault is copied without its index and built from nothing by the
+ * plugin's own build command, with the real model under node. The comparison
+ * is against a CLI export at the same quantization, which defaults to i8:
+ *
+ *   gnosis export --quantize i8 --out .gnosis/artifact-i8
+ *
+ * The vault has to be indexed with images off (`[embed.image] enabled =
+ * false`, image files ignored): the plugin builds notes only, so each image
+ * the CLI indexed would be a document only one side has.
+ *
+ * Everything but the vectors is decided by gnosis's own code on both sides,
+ * so documents, chunks and every chunk's text must match exactly. The
+ * vectors come from two runtimes — fastembed and transformers.js — so the
+ * strongest possible outcome is byte-identical shards, if their last-bit
+ * differences never cross an i8 rounding boundary. This reports how close it
+ * gets, and asserts what must hold regardless.
+ */
+const i8 = process.env["GNOSIS_PARITY_I8"] ?? ".gnosis/artifact-i8";
+
+test("the plugin builds the index the CLI built", options, async () => {
+    const { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { basename, join } = await import("node:path");
+    const cliDir = join(vault!, i8);
+    if (!existsSync(join(cliDir, "manifest.json"))) {
+        throw new Error(`no CLI export at ${cliDir}: run gnosis export --quantize i8 --out ${i8}`);
+    }
+
+    // The same folder name: the CLI labels a vault by it, and so does the plugin.
+    const copy = join(mkdtempSync(join(tmpdir(), "gnosis-parity-")), basename(vault!));
+    cpSync(vault!, copy, { recursive: true, preserveTimestamps: true });
+    rmSync(join(copy, ".gnosis"), { recursive: true, force: true });
+
+    const { default: GnosisPlugin } = await import("../src/main.js");
+    const { MemoryCheckpoints } = await import("../src/build/checkpoints.js");
+    const { pipeline } = await import("@huggingface/transformers");
+    const app = new App(copy);
+    const plugin = new GnosisPlugin(app as never, { id: "gnosis", version: "parity" } as never);
+    await plugin.onload();
+    const cliManifest = JSON.parse(readFileSync(join(cliDir, "manifest.json"), "utf8"));
+    plugin.settings.buildModel = cliManifest.spaces[0].model.id;
+    plugin.checkpoints = new MemoryCheckpoints();
+    plugin.askConsent = async () => true;
+    plugin.confirmReplace = async () => true;
+    plugin.embedderFactory = async (model, pooling) => {
+        const extractor = await pipeline("feature-extraction", model.repo, {
+            revision: model.revision,
+            dtype: model.dtype,
+        });
+        return {
+            embed: async (texts: string[]) => {
+                const output = await extractor(texts, { pooling, normalize: true });
+                const dim = output.dims.at(-1)!;
+                const flat = output.data as Float32Array;
+                return texts.map((_, i) => Float32Array.from(flat.subarray(i * dim, (i + 1) * dim)));
+            },
+            dispose: () => {},
+        };
+    };
+    const started = Date.now();
+    await plugin.buildIndex();
+    const seconds = (Date.now() - started) / 1000;
+
+    const pluginDir = join(copy, ".gnosis/artifact");
+    const ours = await openArtifact(new App(copy) as never, ".gnosis/artifact");
+    const theirs = await openArtifact(new App(vault!) as never, i8);
+    const a = ours.info() as IndexInfo;
+    const b = theirs.info() as IndexInfo;
+    console.log(`build: ${a.documents} notes, ${a.chunks} chunks in ${seconds.toFixed(1)} s (node, native ONNX Runtime)`);
+    assert.equal(a.documents, b.documents, "the same notes");
+    assert.equal(a.chunks, b.chunks, "chunked the same way");
+    assert.deepEqual(a.roots, b.roots, "labeled the same way");
+    assert.deepEqual(
+        a.spaces.map(({ chunks: _c, ...s }) => s),
+        b.spaces.map(({ chunks: _c, ...s }) => s),
+        "the same model, pooling and prefixes recorded",
+    );
+
+    // Text-only signals must agree exactly: they never touch a vector.
+    for (const q of ["note", "template", "daily", "book", "evergreen", "meeting", "recipe"]) {
+        assert.deepEqual(ours.lexicalSearch(q, 50, undefined), theirs.lexicalSearch(q, 50, undefined), q);
+    }
+
+    // Byte for byte. Measured on kepano-obsidian, the only bytes that differ
+    // are per-chunk i8 scales (max/127), by under 1e-6 relative: fastembed and
+    // transformers.js agree on every quantized component and differ in the
+    // float's last bits. So that is what is asserted — everything identical
+    // except the scale field, and that field within 1e-5.
+    const names = readdirSync(cliDir).filter((n) => n.endsWith(".bin")).sort();
+    assert.deepEqual(readdirSync(pluginDir).filter((n) => n.endsWith(".bin")).sort(), names, "the same shards");
+    let identical = 0;
+    let scalesDiffer = 0;
+    let worst = 0;
+    for (const name of names) {
+        const mine = readFileSync(join(pluginDir, name));
+        const cli = readFileSync(join(cliDir, name));
+        assert.equal(mine.length, cli.length, `${name}: same length`);
+        if (mine.equals(cli)) {
+            identical++;
+            continue;
+        }
+        // Header, section table, document block, then 32-byte chunk records
+        // whose last four bytes are the scale; see gnosis's `write_shard`.
+        const sections = cli[9]!;
+        const recordsAt = 16 + sections * 12 + cli.readUInt32LE(12);
+        let count = 0;
+        for (let i = 0; i < sections; i++) count += cli.readUInt32LE(16 + i * 12 + 8);
+        const vectorsAt = recordsAt + count * 32;
+        for (let i = 0; i < cli.length; i++) {
+            if (mine[i] === cli[i]) continue;
+            const inScale = i >= recordsAt && i < vectorsAt && (i - recordsAt) % 32 >= 28;
+            assert.ok(inScale, `${name}: byte ${i} differs outside a scale field`);
+        }
+        for (let r = 0; r < count; r++) {
+            const at = recordsAt + r * 32 + 28;
+            const a = mine.readFloatLE(at);
+            const b = cli.readFloatLE(at);
+            if (a !== b) {
+                scalesDiffer++;
+                worst = Math.max(worst, Math.abs(a - b) / Math.abs(b));
+            }
+        }
+    }
+    console.log(
+        `build: ${identical}/${names.length} shard(s) byte-identical; elsewhere only ${scalesDiffer} ` +
+            `of ${a.chunks} i8 scales differ, by at most ${worst.toExponential(2)} relative`,
+    );
+    assert.ok(worst < 1e-5, `a scale differs by ${worst} relative`);
+    ours.free();
+    theirs.free();
+});

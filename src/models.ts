@@ -1,11 +1,14 @@
 //! Where to fetch the model an index was built with, so a query lands in the
 //! same vector space as the stored chunks.
 //!
-//! This table is deliberately the *only* model knowledge in the plugin. What a
-//! query must be embedded *with* — pooling and the query prefix — comes from
-//! the index's own manifest, because both are per-index facts the plugin has no
-//! business guessing. What is left is the client's own concern: which files to
-//! download for a model id.
+//! For an index that already exists, how to embed — pooling and the prefixes —
+//! comes from its manifest, never from here: they are per-index facts. This
+//! table supplies them only when the plugin builds an index from nothing, the
+//! one case where it is the indexer and has to say what the CLI's own model
+//! table would. `test/parity.test.ts` checks the two agree on a CLI-built index.
+//!
+//! The other column is the client's own concern: which files to download for a
+//! model id.
 //!
 //! Each entry pins the repository and the exact revision the gnosis CLI's
 //! embedder (fastembed) downloads, and the same ONNX file. Matching them is what
@@ -24,6 +27,14 @@ export interface QueryModel {
     dtype: "fp32";
     /// What the reader is asked to download, for the consent prompt.
     downloadBytes: number;
+    /// The rest is what a fresh index records, copied from the gnosis CLI's
+    /// `resolve_text_model` (with `query_instruction` on, its default).
+    pooling: "cls" | "mean";
+    dim: number;
+    queryPrefix: string;
+    documentPrefix: string;
+    /// For the settings picker.
+    label: string;
 }
 
 /** Keyed by the model id an index's manifest records. */
@@ -34,6 +45,11 @@ export const QUERY_MODELS: Readonly<Record<string, QueryModel>> = {
         dtype: "fp32",
         // onnx/model.onnx 127 MB, tokenizer 0.7 MB, configs.
         downloadBytes: 134_000_000,
+        pooling: "cls",
+        dim: 384,
+        queryPrefix: "Represent this sentence for searching relevant passages: ",
+        documentPrefix: "",
+        label: "bge-small-en-v1.5 — English, 134 MB",
     },
     "multilingual-e5-small": {
         repo: "intfloat/multilingual-e5-small",
@@ -42,6 +58,11 @@ export const QUERY_MODELS: Readonly<Record<string, QueryModel>> = {
         // onnx/model.onnx 449 MB, tokenizer 17 MB: the vocabulary is what
         // makes it multilingual, and what makes it large.
         downloadBytes: 487_000_000,
+        pooling: "mean",
+        dim: 384,
+        queryPrefix: "query: ",
+        documentPrefix: "passage: ",
+        label: "multilingual-e5-small — 100 languages, 487 MB",
     },
 };
 
@@ -49,3 +70,6 @@ export const QUERY_MODELS: Readonly<Record<string, QueryModel>> = {
 export function queryModelFor(modelId: string): QueryModel | null {
     return QUERY_MODELS[modelId] ?? null;
 }
+
+/** The model a vault with no index yet is built with, unless the reader picks another. */
+export const DEFAULT_BUILD_MODEL = "bge-small-en-v1.5";
