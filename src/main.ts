@@ -111,7 +111,7 @@ export default class GnosisPlugin extends Plugin {
                 }
                 if (!checking) {
                     this.building.abort();
-                    new Notice("gnosis: canceling — finishing the batch in flight…");
+                    new Notice("Gnosis: canceling — finishing the batch in flight…");
                 }
                 return true;
             },
@@ -153,7 +153,7 @@ export default class GnosisPlugin extends Plugin {
         } catch (error) {
             if (error instanceof ArtifactMissing) {
                 new Notice(
-                    `gnosis: no index in ${this.settings.artifactDir} yet. Run "Build index" to ` +
+                    `Gnosis: no index in ${this.settings.artifactDir} yet. Run "Build index" to ` +
                         `build one here, or with the gnosis CLI:\n` +
                         `  gnosis export --out ${this.settings.artifactDir}`,
                     10_000,
@@ -162,7 +162,7 @@ export default class GnosisPlugin extends Plugin {
                 // A hash mismatch lands here, and it is worth showing
                 // verbatim: it means the artifact is half-synced, which is
                 // fixed by waiting rather than by re-exporting.
-                new Notice(`gnosis: ${describe(error)}`, 10_000);
+                new Notice(`Gnosis: ${describe(error)}`, 10_000);
             }
             return null;
         }
@@ -183,12 +183,12 @@ export default class GnosisPlugin extends Plugin {
             try {
                 return index.lexicalSearch(query, this.settings.limit, undefined) as Hit[];
             } catch (error) {
-                new Notice(`gnosis: ${describe(error)}`);
+                new Notice(`Gnosis: ${describe(error)}`);
                 return [];
             }
         };
         const notify = (message: string) => {
-            new Notice(`gnosis: ${message}`, 8000);
+            new Notice(`Gnosis: ${message}`, 8000);
         };
 
         const space = this.settings.semanticSearch ? this.semanticSpace(index) : null;
@@ -211,7 +211,7 @@ export default class GnosisPlugin extends Plugin {
                     const vectors = await queryVectors(embedder, space, query);
                     return index.search(query, vectors, this.settings.limit, undefined) as Hit[];
                 } catch (error) {
-                    new Notice(`gnosis: ${describe(error)}`);
+                    new Notice(`Gnosis: ${describe(error)}`);
                     return [];
                 }
             },
@@ -232,7 +232,7 @@ export default class GnosisPlugin extends Plugin {
         const space = info.spaces.find((s) => s.space === "text");
         const reason = space === undefined ? "the index has no text space" : unsupportedReason(space);
         if (reason !== null) {
-            new Notice(`gnosis: ${reason}`, 8000);
+            new Notice(`Gnosis: ${reason}`, 8000);
             return null;
         }
         return space ?? null;
@@ -303,7 +303,7 @@ export default class GnosisPlugin extends Plugin {
                 if (this.embedder === state) {
                     this.embedder = null;
                 }
-                new Notice(`gnosis: could not load the model — ${describe(error)}`, 10_000);
+                new Notice(`Gnosis: could not load the model — ${describe(error)}`, 10_000);
             },
         );
         return starting;
@@ -326,11 +326,11 @@ export default class GnosisPlugin extends Plugin {
             // The commonest case by far: the note was written or renamed after
             // the index was built. Saying so beats "no related notes found",
             // which would read as an answer rather than as a stale index.
-            new Notice(`gnosis: ${describe(error)}`, 8000);
+            new Notice(`Gnosis: ${describe(error)}`, 8000);
             return;
         }
         new RelatedModal(this.app, file, hits, (message) => {
-            new Notice(`gnosis: ${message}`, 8000);
+            new Notice(`Gnosis: ${message}`, 8000);
         }).open();
     }
 
@@ -364,13 +364,13 @@ export default class GnosisPlugin extends Plugin {
      */
     async buildIndex(): Promise<void> {
         if (this.building !== null) {
-            new Notice("gnosis: an index build is already running");
+            new Notice("Gnosis: an index build is already running");
             return;
         }
         if (this.isMobile()) {
             // Embedding a whole vault on a phone is a different proposition:
             // build on a desktop, and let this device read the result.
-            new Notice("gnosis: building an index is desktop-only — build on a desktop and sync it here", 10_000);
+            new Notice("Gnosis: building an index is desktop-only — build on a desktop and sync it here", 10_000);
             return;
         }
         const controller = new AbortController();
@@ -378,7 +378,7 @@ export default class GnosisPlugin extends Plugin {
         try {
             await this.runBuildCommand(controller.signal);
         } catch (error) {
-            new Notice(`gnosis: the index build failed — ${describe(error)}. The existing index is unchanged.`, 10_000);
+            new Notice(`Gnosis: the index build failed — ${describe(error)}. The existing index is unchanged.`, 10_000);
         } finally {
             this.building = null;
             this.status?.remove();
@@ -403,7 +403,7 @@ export default class GnosisPlugin extends Plugin {
             ? specForNewIndex(this.settings.buildModel, vaultName)
             : specFromManifest(live.manifestJson, vaultName);
         if ("refuse" in planned) {
-            new Notice(`gnosis: ${planned.refuse}`, 10_000);
+            new Notice(`Gnosis: ${planned.refuse}`, 10_000);
             return;
         }
         const spec = planned.spec;
@@ -432,11 +432,11 @@ export default class GnosisPlugin extends Plugin {
             await this.checkpoints.clear(vault);
         }
         if (resuming) {
-            new Notice("gnosis: resuming the interrupted index build");
+            new Notice("Gnosis: resuming the interrupted index build");
         }
 
         this.status = this.addStatusBarItem();
-        this.status.setText("gnosis: indexing…");
+        this.status.setText("Gnosis: indexing…");
         const result = await runBuild({
             spec,
             notes: this.notes(),
@@ -452,7 +452,7 @@ export default class GnosisPlugin extends Plugin {
 
         if (result.canceled || result.artifact === null) {
             new Notice(
-                "gnosis: index build canceled. The existing index is unchanged; " +
+                "Gnosis: index build canceled. The existing index is unchanged; " +
                     `"Build index" picks up where this one stopped.`,
                 10_000,
             );
@@ -480,7 +480,7 @@ export default class GnosisPlugin extends Plugin {
         const written = await writeArtifact(this.app.vault.adapter, dir, result.artifact);
         await this.checkpoints.clear(vault);
         if (written.upToDate) {
-            new Notice(`gnosis: the index is already up to date — ${result.documents.toLocaleString()} notes`);
+            new Notice(`Gnosis: the index is already up to date — ${result.documents.toLocaleString()} notes`);
             return;
         }
         this.app.saveLocalStorage(LAST_WRITTEN_KEY, await manifestHash(result.artifact.manifestJson));
@@ -492,7 +492,7 @@ export default class GnosisPlugin extends Plugin {
             await this.saveSettings();
         }
         new Notice(
-            `gnosis: indexed ${result.documents.toLocaleString()} notes, ` +
+            `Gnosis: indexed ${result.documents.toLocaleString()} notes, ` +
                 `${result.chunks.toLocaleString()} chunks — ${result.chunksEmbedded.toLocaleString()} ` +
                 `embedded, ${result.notesReused.toLocaleString()} notes unchanged; ` +
                 `${written.written} of ${written.written + written.unchanged} shard(s) written.`,
@@ -587,7 +587,7 @@ class DownloadNotice {
             loaded += file.loaded;
             total += file.total;
         }
-        const message = `gnosis: loading the model — ${megabytes(loaded)} of ${megabytes(total)}`;
+        const message = `Gnosis: loading the model — ${megabytes(loaded)} of ${megabytes(total)}`;
         if (this.notice === null) {
             this.notice = new Notice(message, 0);
         } else {
