@@ -1,18 +1,65 @@
 //! The two model-free tiers, as pickers.
 
-import { SuggestModal } from "obsidian";
-import type { App, TFile } from "obsidian";
+import { Keymap, Platform, SuggestModal } from "obsidian";
+import type { App, PaneType, TFile } from "obsidian";
 import type { Hit } from "./types.js";
-import { hitSnippet, hitSubtitle, resolveHit } from "./results.js";
+import { formatScore, hitSnippet, hitSubtitle, noteName, resolveHit } from "./results.js";
 
-/** Shared rendering and opening, so both pickers behave identically. */
+/** How results are shown and opened, read when a picker opens. */
+export interface Display {
+    /** Where Cmd/Ctrl opens a result; a plain choice always opens in place. */
+    modOpen: PaneType;
+    keyboardHints: boolean;
+    showScores: boolean;
+}
+
+/**
+ * Where a chosen result opens.
+ *
+ * A plain click or Enter replaces the current tab. Cmd/Ctrl (or a middle
+ * click) goes where the reader chose; Obsidian's own Cmd/Ctrl+Alt (split) and
+ * Cmd/Ctrl+Alt+Shift (window) keep their usual meaning.
+ */
+export function paneFor(evt: MouseEvent | KeyboardEvent | undefined, modOpen: PaneType): PaneType | false {
+    const mod = Keymap.isModEvent(evt);
+    if (mod === false) {
+        return false;
+    }
+    return mod === "tab" || mod === true ? modOpen : mod;
+}
+
+const PANE_WORDS: Record<PaneType, string> = { tab: "a new tab", split: "a new split", window: "a new window" };
+
+/** Shared rendering and opening, so every picker behaves identically. */
 abstract class HitModal extends SuggestModal<Hit> {
-    protected constructor(app: App) {
+    protected constructor(
+        app: App,
+        protected readonly display: Display,
+    ) {
         super(app);
+        // Enter is the modal's own; Cmd/Ctrl+Enter has to be asked for.
+        this.scope.register(["Mod"], "Enter", (evt) => {
+            this.selectActiveSuggestion(evt);
+            return false;
+        });
+        if (display.keyboardHints) {
+            this.setInstructions([
+                { command: "↑↓", purpose: "to navigate" },
+                { command: "↵", purpose: "to open" },
+                { command: `${Platform.isMacOS ? "⌘" : "Ctrl"} ↵`, purpose: `to open in ${PANE_WORDS[display.modOpen]}` },
+                { command: "esc", purpose: "to dismiss" },
+            ]);
+        }
     }
 
     override renderSuggestion(hit: Hit, el: HTMLElement): void {
-        el.createEl("div", { cls: "gnosis-hit-title", text: hit.title });
+        if (this.display.showScores) {
+            // The score as gnosis computed it — the same number at any rank —
+            // rather than a percentage of the top hit, which reads 100% even
+            // for a poor match.
+            el.createEl("span", { cls: "gnosis-hit-score", text: formatScore(hit.score) });
+        }
+        el.createEl("div", { cls: "gnosis-hit-title", text: noteName(hit) });
         el.createEl("div", { cls: "gnosis-hit-detail", text: hitSubtitle(hit) });
         const snippet = hitSnippet(hit);
         if (snippet !== "") {
@@ -20,7 +67,7 @@ abstract class HitModal extends SuggestModal<Hit> {
         }
     }
 
-    override onChooseSuggestion(hit: Hit): void {
+    override onChooseSuggestion(hit: Hit, evt?: MouseEvent | KeyboardEvent): void {
         const file = resolveHit(this.app, hit);
         if (file === null) {
             // The index knows a document the vault no longer has. Reporting it
@@ -29,7 +76,7 @@ abstract class HitModal extends SuggestModal<Hit> {
             this.showMissing(hit);
             return;
         }
-        void this.app.workspace.getLeaf(false).openFile(file);
+        void this.app.workspace.getLeaf(paneFor(evt, this.display.modOpen)).openFile(file);
     }
 
     protected abstract showMissing(hit: Hit): void;
@@ -39,10 +86,11 @@ abstract class HitModal extends SuggestModal<Hit> {
 export class LexicalSearchModal extends HitModal {
     constructor(
         app: App,
+        display: Display,
         private readonly runSearch: (query: string) => Hit[],
         private readonly notify: (message: string) => void,
     ) {
-        super(app);
+        super(app, display);
         this.setPlaceholder("Search your vault with Gnosis…");
         this.emptyStateText = "No matches.";
     }
@@ -66,11 +114,12 @@ export class LexicalSearchModal extends HitModal {
 export class RelatedModal extends HitModal {
     constructor(
         app: App,
+        display: Display,
         file: TFile,
         private readonly hits: Hit[],
         private readonly notify: (message: string) => void,
     ) {
-        super(app);
+        super(app, display);
         this.setPlaceholder(`Related to ${file.basename}`);
         this.emptyStateText = "Nothing related found.";
     }
@@ -84,7 +133,7 @@ export class RelatedModal extends HitModal {
         // typing here narrows what is already ranked.
         return this.hits.filter(
             (hit) =>
-                hit.title.toLowerCase().includes(needle) ||
+                noteName(hit).toLowerCase().includes(needle) ||
                 hit.path.toLowerCase().includes(needle),
         );
     }
@@ -108,12 +157,13 @@ export class SemanticSearchModal extends HitModal {
 
     constructor(
         app: App,
+        display: Display,
         private readonly runSearch: (query: string) => Promise<Hit[]>,
         semantic: boolean,
         private readonly notify: (message: string) => void,
         private readonly debounceMs = 150,
     ) {
-        super(app);
+        super(app, display);
         this.setPlaceholder(
             semantic
                 ? "Search your vault by meaning with Gnosis…"

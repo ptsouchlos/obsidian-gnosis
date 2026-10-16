@@ -108,12 +108,15 @@ class StubVault {
 class StubWorkspace {
     activeFile: TFile | null = null;
     opened: string[] = [];
+    /** Where each open went: `false` for the current tab, else a pane type. */
+    panes: unknown[] = [];
 
     getActiveFile(): TFile | null {
         return this.activeFile;
     }
 
-    getLeaf(_newLeaf: boolean): { openFile(file: TFile): Promise<void> } {
+    getLeaf(newLeaf?: unknown): { openFile(file: TFile): Promise<void> } {
+        this.panes.push(newLeaf ?? false);
         return {
             openFile: async (file: TFile) => {
                 this.opened.push(file.path);
@@ -141,7 +144,16 @@ export class App {
     }
 }
 
-export const Platform = { isMobile: false };
+export const Platform = { isMobile: false, isMacOS: false };
+
+/** The test's own events say which modifiers are held. */
+export const Keymap = {
+    isModEvent(evt?: { ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean } | null): string | boolean {
+        if (!evt?.ctrlKey) return false;
+        if (evt.altKey && evt.shiftKey) return "window";
+        return evt.altKey ? "split" : "tab";
+    },
+};
 
 /** Every notice raised, in order — the plugin's whole user-facing channel. */
 export const notices: string[] = [];
@@ -225,6 +237,20 @@ export class SuggestModal<T> {
     emptyStateText = "";
     private placeholder = "";
     opened = false;
+    /** Key bindings the modal registered, as "Mod+Enter". */
+    readonly keys = new Map<string, (evt: unknown) => unknown>();
+    readonly scope = {
+        register: (mods: string[], key: string, fn: (evt: unknown) => unknown) => {
+            this.keys.set([...mods, key].join("+"), fn);
+        },
+    };
+    instructions: { command: string; purpose: string }[] = [];
+
+    setInstructions(instructions: { command: string; purpose: string }[]): void {
+        this.instructions = instructions;
+    }
+
+    selectActiveSuggestion(_evt: unknown): void {}
 
     constructor(readonly app: App) {}
 
@@ -258,9 +284,9 @@ export class SuggestModal<T> {
         return this.getSuggestions(query);
     }
 
-    /** Choose one of the listed results. */
-    choose(value: T): void {
-        this.onChooseSuggestion(value);
+    /** Choose one of the listed results, optionally with a modifier event. */
+    choose(value: T, evt?: unknown): void {
+        this.onChooseSuggestion(value, evt);
     }
 }
 
