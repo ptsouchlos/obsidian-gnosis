@@ -307,6 +307,12 @@ test("the related command opens the panel in the sidebar, once", async () => {
     assert.equal(app.workspace.getLeavesOfType("gnosis-related").length, 1, "revealed, not opened twice");
 });
 
+test("the panel is a page-preview source, so hovering a result previews it", async () => {
+    const { plugin } = await load();
+    const sources = (plugin as never as { hoverSources: Map<string, { defaultMod: boolean }> }).hoverSources;
+    assert.deepEqual(sources.get("gnosis-related"), { display: "Gnosis related notes", defaultMod: true });
+});
+
 test("the panel opens by itself the first time, and never again once closed", async () => {
     const { app, plugin } = await load();
     for (const ready of app.workspace.layoutReady) ready();

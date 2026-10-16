@@ -223,6 +223,22 @@ export class RelatedView extends ItemView {
                 evt.preventDefault();
                 this.openHit(hit, evt);
             });
+            // Page preview, as for any link in Obsidian: the core plugin shows
+            // it, with or without Cmd/Ctrl as its settings say for this panel.
+            link.addEventListener("mouseover", (evt) => {
+                const file = resolveHit(this.app, hit);
+                if (file === null) {
+                    return;
+                }
+                this.app.workspace.trigger("hover-link", {
+                    event: evt,
+                    source: RELATED_VIEW,
+                    hoverParent: this,
+                    targetEl: link,
+                    linktext: file.path,
+                    sourcePath: this.follower.path ?? "",
+                });
+            });
             // A middle click opens a new tab, as everywhere else in Obsidian.
             link.addEventListener("auxclick", (evt) => {
                 if (evt.button === 1) {

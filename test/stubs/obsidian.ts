@@ -274,6 +274,12 @@ export class Plugin {
         this.views.set(type, factory);
     }
 
+    readonly hoverSources = new Map<string, { display: string; defaultMod: boolean }>();
+
+    registerHoverLinkSource(id: string, info: { display: string; defaultMod: boolean }): void {
+        this.hoverSources.set(id, info);
+    }
+
     /** The status bar's text, newest last, for tests. */
     readonly statusTexts: string[] = [];
 

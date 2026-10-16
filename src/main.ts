@@ -107,6 +107,10 @@ export default class GnosisPlugin extends Plugin {
         });
 
         this.registerView(RELATED_VIEW, (leaf) => new RelatedView(leaf, this));
+        // Listed in Settings → Page preview, where the reader chooses whether
+        // hovering needs Cmd/Ctrl; it does by default, as in Obsidian's own
+        // sidebars.
+        this.registerHoverLinkSource(RELATED_VIEW, { display: "Gnosis related notes", defaultMod: true });
         // The id is kept from when this opened a picker, so hotkeys survive.
         this.addCommand({
             id: "related",
