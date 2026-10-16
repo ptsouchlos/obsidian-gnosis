@@ -152,7 +152,7 @@ test("choosing a result whose note is gone says so instead of doing nothing", as
     modal.choose(gone);
     assert.deepEqual(app.workspace.opened, [], "nothing should open");
     assert.ok(
-        notices.some((n) => n.includes("work/planner.md") && n.includes("gnosis export")),
+        notices.some((n) => n.includes("work/planner.md") && n.includes("Build index")),
         `expected a notice naming the file and the fix, got ${JSON.stringify(notices)}`,
     );
 });

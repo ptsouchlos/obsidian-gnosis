@@ -15,7 +15,179 @@
     white-space: nowrap;
 }
 
-.gnosis-settings-status {
+/* Settings. Every color is one of Obsidian's own variables, so the tab
+   follows the reader's theme in light and dark alike. */
+
+.gnosis-settings .gnosis-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-l);
+    padding: var(--size-4-3) var(--size-4-4);
+    margin-bottom: var(--size-4-2);
+}
+
+.gnosis-settings .setting-item.gnosis-card + .setting-item.gnosis-card {
+    border-top: 1px solid var(--background-modifier-border);
+}
+
+.gnosis-index-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--size-4-4);
+}
+
+.gnosis-index-state {
+    display: flex;
+    align-items: center;
+    gap: var(--size-4-2);
+    font-weight: var(--font-semibold);
+    padding-right: var(--size-4-4);
+    border-right: 1px solid var(--background-modifier-border);
+}
+
+.gnosis-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--text-faint);
+    flex: none;
+}
+
+.gnosis-index-card[data-state="ready"] .gnosis-dot {
+    background: var(--color-green);
+}
+
+.gnosis-index-card[data-state="building"] .gnosis-dot {
+    background: var(--interactive-accent);
+    animation: gnosis-pulse 1.6s ease-in-out infinite;
+}
+
+.gnosis-index-card[data-state="paused"] .gnosis-dot {
+    background: var(--color-yellow);
+}
+
+.gnosis-index-card[data-state="unreadable"] .gnosis-dot {
+    background: var(--color-red);
+}
+
+@keyframes gnosis-pulse {
+    50% {
+        opacity: 0.35;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gnosis-index-card[data-state="building"] .gnosis-dot {
+        animation: none;
+    }
+}
+
+.gnosis-index-numbers {
+    display: flex;
+    gap: var(--size-4-6);
+}
+
+.gnosis-figure-value {
+    font-size: var(--font-ui-large);
+    font-weight: var(--font-semibold);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+}
+
+.gnosis-figure-unit {
     color: var(--text-muted);
     font-size: var(--font-ui-smaller);
+}
+
+.gnosis-index-updated {
+    margin-left: auto;
+    text-align: right;
+}
+
+.gnosis-index-when {
+    font-variant-numeric: tabular-nums;
+}
+
+.gnosis-index-bottom {
+    display: flex;
+    align-items: center;
+    gap: var(--size-4-4);
+    margin-top: var(--size-4-3);
+}
+
+.gnosis-index-bottom:has(.gnosis-index-words:empty) {
+    justify-content: flex-end;
+}
+
+.gnosis-index-words {
+    flex: 1;
+    min-width: 0;
+}
+
+.gnosis-index-detail {
+    color: var(--text-normal);
+    font-size: var(--font-ui-small);
+}
+
+.gnosis-index-meta {
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+    overflow-wrap: anywhere;
+}
+
+.gnosis-index-bottom button {
+    flex: none;
+}
+
+.gnosis-note {
+    color: var(--text-muted);
+    font-size: var(--font-ui-small);
+}
+
+.gnosis-advanced {
+    margin: var(--size-4-3) 0 var(--size-4-6);
+}
+
+.gnosis-advanced > summary {
+    cursor: pointer;
+    font-weight: var(--font-medium);
+    margin-bottom: var(--size-4-2);
+}
+
+.gnosis-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--size-4-8);
+    padding-top: var(--size-4-4);
+    border-top: 1px solid var(--background-modifier-border);
+}
+
+.gnosis-footer-title {
+    font-weight: var(--font-semibold);
+    margin-right: var(--size-4-2);
+}
+
+.gnosis-footer-version {
+    color: var(--text-faint);
+    font-size: var(--font-ui-smaller);
+}
+
+.gnosis-footer-links {
+    display: flex;
+    gap: var(--size-4-2);
+}
+
+.gnosis-footer-link {
+    display: flex;
+    padding: var(--size-4-2);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-m);
+    color: var(--text-muted);
+}
+
+.gnosis-footer-link:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
 }

@@ -54,7 +54,7 @@ export class LexicalSearchModal extends HitModal {
     }
 
     protected override showMissing(hit: Hit): void {
-        this.notify(`${hit.path} is in the index but not in the vault — re-run \`gnosis export\`.`);
+        this.notify(`${hit.path} is in the index but not in the vault — run "Build index" to update it.`);
     }
 }
 
@@ -90,7 +90,7 @@ export class RelatedModal extends HitModal {
     }
 
     protected override showMissing(hit: Hit): void {
-        this.notify(`${hit.path} is in the index but not in the vault — re-run \`gnosis export\`.`);
+        this.notify(`${hit.path} is in the index but not in the vault — run "Build index" to update it.`);
     }
 }
 
@@ -141,6 +141,6 @@ export class SemanticSearchModal extends HitModal {
     }
 
     protected override showMissing(hit: Hit): void {
-        this.notify(`${hit.path} is in the index but not in the vault — re-run \`gnosis export\`.`);
+        this.notify(`${hit.path} is in the index but not in the vault — run "Build index" to update it.`);
     }
 }

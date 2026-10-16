@@ -334,3 +334,82 @@ test("the replace warning is silent about what a rebuild keeps", () => {
     const lines = replaceWarning(manifest, "vault");
     assert.equal(lines.length, 2, `no image or folder warning for a plain one-vault index: ${lines}`);
 });
+
+// The settings tab's index card. Its states are decided by `indexStatus`,
+// so these drive the real plugin through each one rather than the drawing.
+
+test("the index card says when there is no index, and offers to build one", async () => {
+    const { plugin } = await load(vaultCopy({ artifact: false }));
+    const status = await plugin.indexStatus();
+    assert.equal(status.state, "none");
+    assert.equal(status.action, "build");
+    assert.equal(status.notes, null);
+    assert.match(status.detail, /\.gnosis\/artifact/);
+});
+
+test("the index card reads an index someone else wrote from its manifest alone", async () => {
+    const { plugin } = await load(vaultCopy({ artifact: true }));
+    const status = await plugin.indexStatus();
+    assert.equal(status.state, "ready");
+    assert.equal(status.action, "update");
+    assert.equal(status.notes, 4);
+    assert.equal(status.chunks, 6);
+    assert.equal(status.builtAt, 1_700_000_400_000);
+    assert.equal(status.model, "bge-small-en-v1.5 · 4d");
+    assert.equal(status.writtenBy, "another device or the gnosis CLI");
+});
+
+test("the index card follows a build: indexing, then ready and written here", async () => {
+    const root = vaultCopy({ artifact: false, extraNotes: 40 });
+    const { plugin, embedder } = await load(root);
+    let changes = 0;
+    plugin.onStatusChange(() => changes++);
+    // `afterBatch` runs before its batch's progress is reported, so the look
+    // after the first batch sees the build but no numbers yet.
+    const seen: Awaited<ReturnType<typeof plugin.indexStatus>>[] = [];
+    embedder.afterBatch = async (calls) => {
+        if (calls <= 2) {
+            seen.push(await plugin.indexStatus());
+        }
+    };
+    await plugin.buildIndex();
+
+    const [during, later] = seen;
+    assert.equal(during!.state, "building");
+    assert.equal(during!.action, "cancel");
+    assert.equal(later!.state, "building");
+    assert.match(later!.detail, /^Indexing \d+\/42 notes · \d+ chunks embedded/);
+    assert.ok(changes >= 3, `start, progress and end each notify: ${changes}`);
+
+    const after = await plugin.indexStatus();
+    assert.equal(after.state, "ready");
+    assert.equal(after.notes, 42);
+    assert.equal(after.writtenBy, "this device");
+});
+
+test("the index card offers to resume a canceled build", async () => {
+    const root = vaultCopy({ artifact: false, extraNotes: 40 });
+    const { plugin, embedder } = await load(root);
+    embedder.afterBatch = (calls) => {
+        if (calls === 1) {
+            plugin.cancelBuild();
+        }
+    };
+    await plugin.buildIndex();
+
+    const status = await plugin.indexStatus();
+    assert.equal(status.state, "paused");
+    assert.equal(status.action, "resume");
+    assert.match(status.detail, /^\d+ of 42 notes indexed/);
+    assert.match(status.detail, /needs a finished index/, "there is no previous index to fall back on");
+});
+
+test("the index card names a manifest it cannot read", async () => {
+    const root = vaultCopy({ artifact: true });
+    writeFileSync(join(root, ARTIFACT, "manifest.json"), "{ not json");
+    const { plugin } = await load(root);
+    const status = await plugin.indexStatus();
+    assert.equal(status.state, "unreadable");
+    assert.match(status.detail, /manifest\.json is not valid JSON/);
+    assert.equal(status.action, "build");
+});

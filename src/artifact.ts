@@ -101,7 +101,7 @@ export async function readArtifact(app: App, dir: string): Promise<RawArtifact> 
             if (!(await adapter.exists(path))) {
                 throw new Error(
                     `${manifestPath} lists shard '${shard.name}', which is not in ${dir} — ` +
-                        `re-run \`gnosis export\``,
+                        `if it is still syncing, wait; otherwise run "Build index" or \`gnosis export\``,
                 );
             }
             shards.set(shard.name, new Uint8Array(await adapter.readBinary(path)));
