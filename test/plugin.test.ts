@@ -113,6 +113,25 @@ test("lexical search ranks the vault with no model at all", async () => {
     assert.ok(hits[0]!.score > 0);
 });
 
+test("a ranking preset changes the next search, with no reload", async () => {
+    const { plugin } = await load();
+    run(plugin, "search");
+    await aModal();
+    const modal = openedModals.at(-1)!;
+    // "hydration" is the title of one note: exactly what the title bonus lifts.
+    const score = () => (modal.type("hydration") as Hit[]).find((h) => h.path === "notes/hydration.md")!.score;
+
+    const withBonus = score();
+    plugin.settings.titleBonus = "off";
+    plugin.applySearchConfig();
+    const without = score();
+    assert.ok(without < withBonus, `${without} should be below ${withBonus}`);
+
+    plugin.settings.titleBonus = "default";
+    plugin.applySearchConfig();
+    assert.equal(score(), withBonus, "and back");
+});
+
 test("choosing a result opens that note", async () => {
     const { app, plugin } = await load();
     run(plugin, "search");

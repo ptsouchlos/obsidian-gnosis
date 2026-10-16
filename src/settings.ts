@@ -6,7 +6,9 @@ import { PluginSettingTab, Setting, setIcon } from "obsidian";
 import type { App } from "obsidian";
 import type GnosisPlugin from "./main.js";
 import { DEFAULT_BUILD_MODEL, QUERY_MODELS } from "./models.js";
+import type { Strategy, TitleBonus } from "./ranking.js";
 import type { IndexStatus } from "./status.js";
+import { segmented } from "./ui/segmented.js";
 
 export interface GnosisSettings {
     /**
@@ -34,6 +36,10 @@ export interface GnosisSettings {
      * index is always rebuilt with its own model, whatever this says.
      */
     buildModel: string;
+    /** How meaning and keywords are weighed; see `ranking.ts`. */
+    strategy: Strategy;
+    /** How much a note's title counts; see `ranking.ts`. */
+    titleBonus: TitleBonus;
 }
 
 export const DEFAULT_SETTINGS: GnosisSettings = {
@@ -41,6 +47,8 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     limit: 20,
     semanticSearch: false,
     buildModel: DEFAULT_BUILD_MODEL,
+    strategy: "balanced",
+    titleBonus: "default",
 };
 
 /** Where the footer's links go. */
@@ -133,6 +141,52 @@ export class GnosisSettingTab extends PluginSettingTab {
 
         this.heading(containerEl, "Search");
 
+        containerEl.createEl("p", {
+            cls: "gnosis-note",
+            text:
+                "Gnosis ranks each note by meaning and by keywords, blends the two, and gives a " +
+                "small bonus to notes whose title matches. The defaults are the measured ones; " +
+                "change them only if your searches say so.",
+        });
+        const pipeline = containerEl.createDiv({ cls: "gnosis-card gnosis-pipeline" });
+
+        const strategy = this.card(new Setting(containerEl)).setName("Search strategy");
+        const strategyControl = segmented<Strategy>(
+            strategy.controlEl,
+            "Search strategy",
+            [
+                { value: "balanced", label: "Balanced" },
+                { value: "keyword", label: "Keyword focused" },
+            ],
+            this.plugin.settings.strategy,
+            async (value) => {
+                this.plugin.settings.strategy = value;
+                await this.saveRanking();
+                drawSearch();
+            },
+        );
+
+        const titleBonus = this.card(new Setting(containerEl))
+            .setName("Title bonus")
+            .setDesc(
+                "Lifts a note whose title carries the words you searched for, so the note about a " +
+                    "topic outranks notes that only mention it.",
+            );
+        segmented<TitleBonus>(
+            titleBonus.controlEl,
+            "Title bonus",
+            [
+                { value: "off", label: "Off" },
+                { value: "default", label: "On" },
+            ],
+            this.plugin.settings.titleBonus,
+            async (value) => {
+                this.plugin.settings.titleBonus = value;
+                await this.saveRanking();
+                drawSearch();
+            },
+        );
+
         this.card(new Setting(containerEl))
             .setName("Results")
             .setDesc("How many results each search shows.")
@@ -146,6 +200,25 @@ export class GnosisSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }),
             );
+        containerEl.createEl("p", { cls: "gnosis-note", text: "Changes apply to your next search." });
+
+        /** The parts of the Search section that depend on other settings. */
+        const drawSearch = () => {
+            const semantic = this.plugin.settings.semanticSearch;
+            this.renderPipeline(pipeline, semantic);
+            // With no model there is nothing to blend: keywords are all there is.
+            strategyControl.setDisabled(!semantic);
+            strategy.setDesc(
+                semantic
+                    ? "Balanced suits nearly every vault. Keyword focused trusts exact words more " +
+                          "than meaning: try it if searches for exact terms rank the wrong notes " +
+                          "first, or if your notes are not in the model's language (there, turning " +
+                          "semantic search off can do better still)."
+                    : "Turn on semantic search (below) to blend meaning with keywords; until then " +
+                          "search is by keywords alone.",
+            );
+        };
+        drawSearch();
 
         this.heading(containerEl, "Model");
 
@@ -159,12 +232,11 @@ export class GnosisSettingTab extends PluginSettingTab {
                 toggle.setValue(this.plugin.settings.semanticSearch).onChange(async (on) => {
                     if (!on) {
                         await this.plugin.disableSemanticSearch();
-                        return;
-                    }
-                    // Turning it on asks first; a refusal puts the toggle back.
-                    if (!(await this.plugin.enableSemanticSearch())) {
+                    } else if (!(await this.plugin.enableSemanticSearch())) {
+                        // Turning it on asks first; a refusal puts the toggle back.
                         toggle.setValue(false);
                     }
+                    drawSearch();
                 }),
             );
 
@@ -175,6 +247,44 @@ export class GnosisSettingTab extends PluginSettingTab {
         this.unsubscribe?.();
         this.unsubscribe = null;
         this.ticket++;
+    }
+
+    private async saveRanking(): Promise<void> {
+        await this.plugin.saveSettings();
+        this.plugin.applySearchConfig();
+    }
+
+    /** Notes → meaning + keywords → blend → title bonus → results. */
+    private renderPipeline(el: HTMLElement, semantic: boolean): void {
+        el.empty();
+        const settings = this.plugin.settings;
+        const step = (parent: HTMLElement, text: string, off = false, sub?: string) => {
+            const box = parent.createDiv({ cls: "gnosis-step" });
+            box.toggleClass("is-off", off);
+            box.createDiv({ text });
+            if (sub !== undefined) {
+                box.createDiv({ cls: "gnosis-step-sub", text: sub });
+            }
+            return box;
+        };
+        const arrow = () => el.createSpan({ cls: "gnosis-step-arrow", text: "→" });
+
+        step(el, "Notes");
+        arrow();
+        const channels = el.createDiv({ cls: "gnosis-step-stack" });
+        step(channels, "Meaning", !semantic, semantic ? undefined : "semantic search off");
+        step(channels, "Keywords");
+        arrow();
+        step(
+            el,
+            "Blend",
+            !semantic,
+            semantic ? (settings.strategy === "balanced" ? "balanced" : "keyword focused") : "keywords only",
+        ).addClass("is-accent");
+        arrow();
+        step(el, "Title bonus", settings.titleBonus === "off", settings.titleBonus === "off" ? "off" : "on");
+        arrow();
+        step(el, "Results");
     }
 
     private heading(containerEl: HTMLElement, name: string): void {

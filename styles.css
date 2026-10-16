@@ -191,3 +191,89 @@
     color: var(--text-normal);
     background: var(--background-modifier-hover);
 }
+
+/* A choice between presets: one rounded group, the selected one in the accent. */
+
+.gnosis-segmented {
+    display: inline-flex;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-m);
+    overflow: hidden;
+    flex: none;
+}
+
+.gnosis-segmented button {
+    border-radius: 0;
+    box-shadow: none;
+    background: var(--interactive-normal);
+    color: var(--text-muted);
+    padding: var(--size-4-1) var(--size-4-3);
+}
+
+.gnosis-segmented button + button {
+    border-left: 1px solid var(--background-modifier-border);
+}
+
+.gnosis-segmented button:hover:not(:disabled) {
+    background: var(--interactive-hover);
+    color: var(--text-normal);
+}
+
+.gnosis-segmented button.is-selected {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent);
+    font-weight: var(--font-semibold);
+}
+
+.gnosis-segmented.is-disabled {
+    opacity: 0.5;
+}
+
+.gnosis-segmented button:disabled {
+    cursor: not-allowed;
+}
+
+/* How Gnosis ranks: notes → meaning + keywords → blend → title bonus → results. */
+
+.gnosis-pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--size-4-2);
+}
+
+.gnosis-step-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--size-4-1);
+}
+
+.gnosis-step {
+    padding: var(--size-4-1) var(--size-4-3);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-m);
+    background: var(--background-primary);
+    text-align: center;
+    font-size: var(--font-ui-small);
+}
+
+.gnosis-step.is-accent:not(.is-off) {
+    border-color: var(--interactive-accent);
+    color: var(--text-accent);
+    font-weight: var(--font-semibold);
+}
+
+.gnosis-step.is-off {
+    color: var(--text-faint);
+    border-style: dashed;
+}
+
+.gnosis-step-sub {
+    color: var(--text-faint);
+    font-size: var(--font-ui-smaller);
+    font-weight: var(--font-normal);
+}
+
+.gnosis-step-arrow {
+    color: var(--text-faint);
+}

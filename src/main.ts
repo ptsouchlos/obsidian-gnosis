@@ -43,6 +43,7 @@ import {
 } from "./embedder.js";
 import { LexicalSearchModal, RelatedModal, SemanticSearchModal } from "./modals.js";
 import { queryModelFor } from "./models.js";
+import { withPresets } from "./ranking.js";
 import { DEFAULT_SETTINGS, GnosisSettingTab, type GnosisSettings } from "./settings.js";
 import { indexStatus, type IndexStatus } from "./status.js";
 import type { Hit, IndexInfo, SpaceInfo } from "./types.js";
@@ -162,6 +163,7 @@ export default class GnosisPlugin extends Plugin {
         }
         try {
             this.index = await openArtifact(this.app, this.settings.artifactDir);
+            this.applySearchConfig();
             return this.index;
         } catch (error) {
             if (error instanceof ArtifactMissing) {
@@ -179,6 +181,21 @@ export default class GnosisPlugin extends Plugin {
             }
             return null;
         }
+    }
+
+    /**
+     * Apply the reader's ranking presets to the loaded index, if one is.
+     *
+     * The artifact carries no search configuration — it is a client's own
+     * choice — so this runs each time the index opens and whenever a preset
+     * changes, and the next search uses it.
+     */
+    applySearchConfig(): void {
+        if (this.index === null) {
+            return;
+        }
+        const base = this.index.searchConfig() as { dense_weight: number; title_boost: number };
+        this.index.setSearchConfig(withPresets(base, this.settings.strategy, this.settings.titleBonus));
     }
 
     /** Drop the loaded index, so the next search re-reads the artifact. */
