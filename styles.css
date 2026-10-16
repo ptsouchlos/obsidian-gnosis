@@ -333,3 +333,101 @@
         animation: none;
     }
 }
+
+/* The related-notes panel. */
+
+.gnosis-related {
+    padding: var(--size-4-2) var(--size-4-3);
+}
+
+.gnosis-related-bar {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--size-4-1);
+    margin-bottom: var(--size-4-3);
+}
+
+.gnosis-related-bar .clickable-icon.is-active {
+    color: var(--interactive-accent);
+}
+
+.gnosis-related-header {
+    flex: 1;
+    min-width: 0;
+    margin-left: var(--size-4-1);
+}
+
+.gnosis-related-folder {
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gnosis-related-title {
+    font-weight: var(--font-semibold);
+    overflow-wrap: anywhere;
+}
+
+.gnosis-related-message {
+    color: var(--text-muted);
+    font-size: var(--font-ui-small);
+    margin: var(--size-4-2) 0;
+}
+
+.gnosis-related-row {
+    border-radius: var(--radius-s);
+}
+
+.gnosis-related-row.is-open {
+    background: var(--background-secondary);
+}
+
+.gnosis-related-line {
+    display: flex;
+    align-items: center;
+    gap: var(--size-4-1);
+    padding: var(--size-2-1) 0;
+}
+
+.gnosis-related-line .gnosis-hit-score {
+    float: none;
+    margin-left: 0;
+    flex: none;
+}
+
+.gnosis-related-toggle svg {
+    transition: transform 120ms ease;
+}
+
+.gnosis-related-row.is-open .gnosis-related-toggle svg {
+    transform: rotate(90deg);
+}
+
+.gnosis-related-link {
+    color: var(--link-color);
+    text-decoration: underline;
+    text-decoration-color: var(--link-unresolved-decoration-color, currentColor);
+    overflow-wrap: anywhere;
+}
+
+.gnosis-related-link:hover {
+    color: var(--link-color-hover);
+}
+
+.gnosis-related-detail {
+    padding: 0 var(--size-4-2) var(--size-4-2) calc(var(--size-4-8) + var(--size-4-1));
+    font-size: var(--font-ui-smaller);
+}
+
+.gnosis-related-snippet {
+    color: var(--text-muted);
+    margin-top: var(--size-2-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gnosis-related-toggle svg {
+        transition: none;
+    }
+}

@@ -18,6 +18,10 @@ export class TFile {
         readonly basename: string,
         readonly stat: { mtime: number } = { mtime: 0 },
     ) {}
+
+    get extension(): string {
+        return this.path.split(".").pop() ?? "";
+    }
 }
 
 /** Reads through to a real directory, as the desktop adapter does. */
@@ -136,6 +140,37 @@ class StubWorkspace {
         return this.activeFile;
     }
 
+    /** The plugin opens its panel once layout is ready; tests run that by hand. */
+    readonly layoutReady: (() => void)[] = [];
+
+    onLayoutReady(callback: () => void): void {
+        this.layoutReady.push(callback);
+    }
+
+    on(_name: string, _callback: (...args: unknown[]) => unknown): { name: string } {
+        return { name: _name };
+    }
+
+    /** Leaves the plugin asked for, by the view type set on them. */
+    readonly leaves: { type: string | null; setViewState(state: { type: string }): Promise<void> }[] = [];
+
+    getLeavesOfType(type: string): unknown[] {
+        return this.leaves.filter((leaf) => leaf.type === type);
+    }
+
+    getRightLeaf(_split: boolean): unknown {
+        const leaf = {
+            type: null as string | null,
+            setViewState: async (state: { type: string }) => {
+                leaf.type = state.type;
+            },
+        };
+        this.leaves.push(leaf);
+        return leaf;
+    }
+
+    async revealLeaf(_leaf: unknown): Promise<void> {}
+
     getLeaf(newLeaf?: unknown): { openFile(file: TFile): Promise<void> } {
         this.panes.push(newLeaf ?? false);
         return {
@@ -232,6 +267,18 @@ export class Plugin {
     }
 
     addSettingTab(_tab: unknown): void {}
+
+    readonly views = new Map<string, unknown>();
+
+    registerView(type: string, factory: unknown): void {
+        this.views.set(type, factory);
+    }
+
+    readonly hoverSources = new Map<string, { display: string; defaultMod: boolean }>();
+
+    registerHoverLinkSource(id: string, info: { display: string; defaultMod: boolean }): void {
+        this.hoverSources.set(id, info);
+    }
 
     /** The status bar's text, newest last, for tests. */
     readonly statusTexts: string[] = [];
@@ -358,4 +405,18 @@ export class Setting {
     addDropdown(_cb: unknown): this {
         return this;
     }
+}
+
+/** The panel's base class; the plugin's view logic is tested through `RelatedFollower`. */
+export class ItemView {
+    contentEl = {} as HTMLElement;
+    constructor(readonly leaf: unknown) {}
+    registerEvent(_ref: unknown): void {}
+}
+
+export class Menu {
+    addItem(_cb: unknown): this {
+        return this;
+    }
+    showAtMouseEvent(_evt: unknown): void {}
 }
