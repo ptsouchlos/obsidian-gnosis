@@ -10,9 +10,15 @@ import type { App } from "obsidian";
 import init, { Index } from "../vendor/gnosis-wasm/gnosis_wasm.js";
 import wasmBytes from "../vendor/gnosis-wasm/gnosis_wasm_bg.wasm";
 
-/** The manifest, as far as loading needs to know. */
-interface Manifest {
-    shards: { name: string }[];
+/** The manifest, as far as the plugin needs to know. */
+export interface Manifest {
+    shards: { name: string; hash: string }[];
+}
+
+/** An artifact as bytes: what is on disk, before anything opens it. */
+export interface RawArtifact {
+    manifestJson: string;
+    shards: Map<string, Uint8Array>;
 }
 
 export const MANIFEST_NAME = "manifest.json";
@@ -35,13 +41,13 @@ let started: Promise<unknown> | null = null;
  * the main thread, and that refusal would surface as a plugin that fails to
  * load rather than as a slow one.
  */
-function startWasm(): Promise<unknown> {
+export function startWasm(): Promise<unknown> {
     started ??= init({ module_or_path: wasmBytes });
     return started;
 }
 
 /** Join vault-relative path segments the way the adapter expects them. */
-function join(dir: string, name: string): string {
+export function join(dir: string, name: string): string {
     const base = dir.replace(/\/+$/, "");
     return base === "" ? name : `${base}/${name}`;
 }
@@ -55,6 +61,27 @@ function join(dir: string, name: string): string {
  * the slow part, and the manifest already names every file.
  */
 export async function openArtifact(app: App, dir: string): Promise<Index> {
+    const raw = await readArtifact(app, dir);
+    await startWasm();
+    return Index.open(raw.manifestJson, raw.shards as unknown as Map<unknown, unknown>);
+}
+
+/** Parse a manifest's JSON, naming the file when it is not JSON at all. */
+export function parseManifest(json: string, where: string): Manifest {
+    try {
+        return JSON.parse(json) as Manifest;
+    } catch (cause) {
+        throw new Error(`${where} is not valid JSON`, { cause });
+    }
+}
+
+/**
+ * Read the artifact in `dir` as bytes, without verifying or opening it.
+ *
+ * Throws `ArtifactMissing` when there is no manifest, which callers treat as
+ * an ordinary state.
+ */
+export async function readArtifact(app: App, dir: string): Promise<RawArtifact> {
     const adapter = app.vault.adapter;
     const manifestPath = join(dir, MANIFEST_NAME);
     if (!(await adapter.exists(manifestPath))) {
@@ -62,12 +89,7 @@ export async function openArtifact(app: App, dir: string): Promise<Index> {
     }
 
     const manifestJson = await adapter.read(manifestPath);
-    let manifest: Manifest;
-    try {
-        manifest = JSON.parse(manifestJson) as Manifest;
-    } catch (cause) {
-        throw new Error(`${manifestPath} is not valid JSON`, { cause });
-    }
+    const manifest = parseManifest(manifestJson, manifestPath);
     if (!Array.isArray(manifest.shards) || manifest.shards.length === 0) {
         throw new Error(`${manifestPath} lists no shards`);
     }
@@ -86,6 +108,5 @@ export async function openArtifact(app: App, dir: string): Promise<Index> {
         }),
     );
 
-    await startWasm();
-    return Index.open(manifestJson, shards as unknown as Map<unknown, unknown>);
+    return { manifestJson, shards };
 }

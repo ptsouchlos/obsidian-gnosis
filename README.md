@@ -11,7 +11,7 @@ comparison behind related-notes are the same code — and the same measurements 
 as the CLI's. This plugin reads bytes out of the vault, calls into it, and
 shows what comes back.
 
-## Status: stage 2
+## Status: stage 3
 
 **Works with no model and no download:**
 
@@ -41,17 +41,40 @@ shows what comes back.
   index rather than assumed, so an index built with `query_instruction = false`
   is queried without the instruction, as the CLI would.
 
+**Building the index here** (command: *Build index*), desktop only:
+
+- Builds with gnosis's own `Builder`, compiled to WebAssembly — the same
+  parsing, chunking, content hashing and shard layout as `gnosis index` and
+  `gnosis export`. Built from nothing on the kepano-obsidian vault, it matches
+  the CLI's export byte for byte except the per-chunk i8 scales, which differ
+  in their last bits (under 1e-6 relative) between the two runtimes.
+- **Incremental**: only notes whose content changed are embedded; an
+  unchanged vault writes nothing at all, and an edit rewrites the shard it is
+  in and the manifest.
+- **Resumable and cancelable**: progress is checkpointed to this device's
+  IndexedDB — never the vault, so a half-built index never syncs anywhere.
+  *Cancel index build*, or closing Obsidian, keeps the existing index
+  untouched; the next *Build index* picks up where it stopped.
+- An existing index keeps its own model and settings. A vault with none is
+  built with *Model for new indexes* (bge-small-en-v1.5 by default).
+- **Two writers**: if the index in the vault was written by another device or
+  by the CLI, the plugin asks before replacing it, and says what a rebuild here
+  drops (images, other folders).
+
 **Not yet:**
 
-- **Staleness reporting** — "built 3 days ago, 47 notes have changed since".
-- **Images**, which the index already carries; a text query needs CLIP's text
-  tower, a second model.
-- **Indexing from the plugin.** For now the machine with the CLI builds the
-  index, and every machine reads it.
+- **Staleness reporting** — "built 3 days ago, 47 notes have changed since",
+  and rebuilding automatically when notes change.
+- **Images and PDFs**, which only the CLI indexes; a text query against images
+  needs CLIP's text tower, a second model.
 
 ## Getting started
 
-Build an index with the gnosis CLI, in the vault:
+Install the plugin and run **Build index**. It asks before downloading the
+model, then indexes in the background with progress in the status bar.
+
+Or build with the gnosis CLI, which is faster on a large vault and the only
+way to index images and PDFs:
 
 ```sh
 cd /path/to/vault
@@ -59,10 +82,10 @@ gnosis index .
 gnosis export --out .gnosis/artifact
 ```
 
-Then install the plugin and point it at that folder (`.gnosis/artifact` is the
-default). The index is a manifest plus shards; shard names are stable and only
-changed documents are rewritten, so it syncs as a handful of files rather than
-one large one.
+Either way the index lives in `.gnosis/artifact` (the default; configurable).
+It is a manifest plus shards; shard names are stable and only changed
+documents are rewritten, so it syncs as a handful of files rather than one
+large one.
 
 ## Building
 
@@ -105,10 +128,21 @@ Three suites, each answering something the others cannot:
   own query prefix applied, the keyword fallback while the model loads, and
   what it says when the model cannot load or the index's model is unsupported.
   The WebAssembly module and its hybrid ranking are real.
+- `test/build.test.ts` — *Build index* against copies of the fixture vault,
+  with a deterministic stand-in model so a test can see exactly what was
+  embedded: a fresh build, an unchanged rebuild that writes nothing, an edit
+  that re-embeds one note, a deletion, cancel-and-resume with nothing embedded
+  twice, checkpoints mid-build, and the two-writers prompt — including another
+  writer replacing the index *during* a build.
 - `test/parity.test.ts` — the real model, against vectors the gnosis CLI
   stored: each chunk's exact embedding input is re-embedded with the files
   `src/models.ts` names and must find its own document with a cosine of ~1.
-  Skipped unless pointed at a vault exported with f32 vectors:
+  A second test builds the same vault from nothing through *Build index* and
+  compares it with a CLI export byte for byte. Skipped unless pointed at a
+  vault exported both ways (`gnosis export --quantize f32 --out
+  .gnosis/artifact` and `--quantize i8 --out .gnosis/artifact-i8`), indexed
+  with images off — the plugin builds notes only, so an image would be one
+  document the two sides disagree on:
   `GNOSIS_PARITY_VAULT=/path/to/vault npm test`. Downloads the model.
 - `test/real-vault.test.ts` — the same plugin against a real vault, skipped
   unless pointed at one: `GNOSIS_VAULT=/path/to/vault npm test`. It asserts the

@@ -3,6 +3,7 @@
 import { PluginSettingTab, Setting } from "obsidian";
 import type { App } from "obsidian";
 import type GnosisPlugin from "./main.js";
+import { DEFAULT_BUILD_MODEL, QUERY_MODELS } from "./models.js";
 
 export interface GnosisSettings {
     /**
@@ -25,12 +26,18 @@ export interface GnosisSettings {
      * source in front of them, not a default.
      */
     semanticSearch: boolean;
+    /**
+     * The model "Build index" uses for a vault with no index yet. An existing
+     * index is always rebuilt with its own model, whatever this says.
+     */
+    buildModel: string;
 }
 
 export const DEFAULT_SETTINGS: GnosisSettings = {
     artifactDir: ".gnosis/artifact",
     limit: 20,
     semanticSearch: false,
+    buildModel: DEFAULT_BUILD_MODEL,
 };
 
 export class GnosisSettingTab extends PluginSettingTab {
@@ -96,6 +103,22 @@ export class GnosisSettingTab extends PluginSettingTab {
                     }
                 }),
             );
+
+        new Setting(containerEl)
+            .setName("Model for new indexes")
+            .setDesc(
+                "What \"Build index\" embeds with when this vault has no index yet. An existing " +
+                    "index keeps its own model; to switch, delete it and build again.",
+            )
+            .addDropdown((dropdown) => {
+                for (const [id, model] of Object.entries(QUERY_MODELS)) {
+                    dropdown.addOption(id, model.label);
+                }
+                dropdown.setValue(this.plugin.settings.buildModel).onChange(async (value) => {
+                    this.plugin.settings.buildModel = value;
+                    await this.plugin.saveSettings();
+                });
+            });
 
         new Setting(containerEl).setName("Index").setHeading();
 

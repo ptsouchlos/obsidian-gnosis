@@ -8,14 +8,15 @@
 //! Everything the real API does that cannot be faked here — rendering,
 //! editors, syncing — the plugin does not do.
 
-import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { basename, join, relative } from "node:path";
 
 export class TFile {
     constructor(
         readonly path: string,
         readonly basename: string,
+        readonly stat: { mtime: number } = { mtime: 0 },
     ) {}
 }
 
@@ -35,6 +36,28 @@ class StubAdapter {
         const buf = await readFile(join(this.root, path));
         return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
     }
+
+    /** Every write, in order, so a test can see what a build touched. */
+    readonly writes: string[] = [];
+
+    async write(path: string, data: string): Promise<void> {
+        this.writes.push(path);
+        await writeFile(join(this.root, path), data);
+    }
+
+    async writeBinary(path: string, data: ArrayBuffer): Promise<void> {
+        this.writes.push(path);
+        await writeFile(join(this.root, path), new Uint8Array(data));
+    }
+
+    async mkdir(path: string): Promise<void> {
+        await mkdir(join(this.root, path), { recursive: true });
+    }
+
+    async remove(path: string): Promise<void> {
+        this.writes.push(`-${path}`);
+        await rm(join(this.root, path));
+    }
 }
 
 class StubVault {
@@ -49,7 +72,35 @@ class StubVault {
             return null;
         }
         const basename = path.split("/").pop()!.replace(/\.[^.]+$/, "");
-        return new TFile(path, basename);
+        return new TFile(path, basename, { mtime: statSync(join(this.root, path)).mtimeMs });
+    }
+
+    getName(): string {
+        return basename(this.root);
+    }
+
+    /** Markdown files outside dot-folders, as Obsidian's own index has them. */
+    getMarkdownFiles(): TFile[] {
+        const found: TFile[] = [];
+        const walk = (dir: string) => {
+            for (const entry of readdirSync(dir, { withFileTypes: true })) {
+                if (entry.name.startsWith(".")) {
+                    continue;
+                }
+                const full = join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    walk(full);
+                } else if (entry.name.endsWith(".md")) {
+                    found.push(this.getFileByPath(relative(this.root, full).split("\\").join("/"))!);
+                }
+            }
+        };
+        walk(this.root);
+        return found;
+    }
+
+    async cachedRead(file: TFile): Promise<string> {
+        return readFile(join(this.root, file.path), "utf8");
     }
 }
 
@@ -74,11 +125,23 @@ class StubWorkspace {
 export class App {
     readonly vault: StubVault;
     readonly workspace = new StubWorkspace();
+    /** Obsidian's per-vault, per-device `localStorage`. */
+    readonly local = new Map<string, unknown>();
 
     constructor(root: string) {
         this.vault = new StubVault(root);
     }
+
+    loadLocalStorage(key: string): unknown {
+        return this.local.get(key) ?? null;
+    }
+
+    saveLocalStorage(key: string, data: unknown): void {
+        this.local.set(key, data);
+    }
 }
+
+export const Platform = { isMobile: false };
 
 /** Every notice raised, in order — the plugin's whole user-facing channel. */
 export const notices: string[] = [];
@@ -131,6 +194,16 @@ export class Plugin {
     }
 
     addSettingTab(_tab: unknown): void {}
+
+    /** The status bar's text, newest last, for tests. */
+    readonly statusTexts: string[] = [];
+
+    addStatusBarItem(): { setText(text: string): void; remove(): void } {
+        return {
+            setText: (text: string) => this.statusTexts.push(text),
+            remove: () => {},
+        };
+    }
 
     async loadData(): Promise<unknown> {
         return this.data;
@@ -223,6 +296,9 @@ export class Setting {
         return this;
     }
     addButton(_cb: unknown): this {
+        return this;
+    }
+    addDropdown(_cb: unknown): this {
         return this;
     }
 }

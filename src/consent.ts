@@ -1,8 +1,8 @@
 //! Asking before downloading anything.
 //!
-//! Semantic search is the first thing in this plugin that touches the
-//! network, so the prompt says exactly what will be fetched, from where and how
-//! large it is — and that nothing goes the other way.
+//! Semantic search and building an index are the only things in this plugin
+//! that touch the network, so the prompt says exactly what will be fetched,
+//! from where and how large it is — and that nothing goes the other way.
 
 import { Modal, Setting } from "obsidian";
 import type { App } from "obsidian";
@@ -43,8 +43,8 @@ export function megabytes(bytes: number): string {
 export function consentLines(downloads: Download[]): string[] {
     const total = downloads.reduce((sum, d) => sum + d.bytes, 0);
     return [
-        `Semantic search runs the model your index was built with, here, on this device. ` +
-            `Turning it on downloads, once (${megabytes(total)} in all):`,
+        `gnosis embeds your notes and your queries with this model, here, on this device. ` +
+            `Using it downloads, once (${megabytes(total)} in all):`,
         ...downloads.map((d) => `• ${d.what} — ${megabytes(d.bytes)} from ${d.from}`),
         "Both are cached, so nothing is downloaded again. Your notes and your queries never " +
             "leave this device: nothing is uploaded, and the model runs locally.",
@@ -64,7 +64,7 @@ export class ConsentModal extends Modal {
     }
 
     override onOpen(): void {
-        this.titleEl.setText("Download the model for semantic search?");
+        this.titleEl.setText("Download the embedding model?");
         for (const line of consentLines(this.downloads)) {
             this.contentEl.createEl("p", { text: line });
         }
@@ -89,4 +89,46 @@ export class ConsentModal extends Modal {
 
 export function askConsent(app: App, downloads: Download[]): Promise<boolean> {
     return new Promise((resolve) => new ConsentModal(app, downloads, resolve).open());
+}
+
+/** A yes/no question with its consequences spelled out. */
+class ConfirmModal extends Modal {
+    private agreed = false;
+
+    constructor(
+        app: App,
+        private readonly title: string,
+        private readonly lines: string[],
+        private readonly confirmText: string,
+        private readonly decide: (agreed: boolean) => void,
+    ) {
+        super(app);
+    }
+
+    override onOpen(): void {
+        this.titleEl.setText(this.title);
+        for (const line of this.lines) {
+            this.contentEl.createEl("p", { text: line });
+        }
+        new Setting(this.contentEl)
+            .addButton((button) =>
+                button
+                    .setButtonText(this.confirmText)
+                    .setWarning()
+                    .onClick(() => {
+                        this.agreed = true;
+                        this.close();
+                    }),
+            )
+            .addButton((button) => button.setButtonText("Cancel").onClick(() => this.close()));
+    }
+
+    override onClose(): void {
+        this.contentEl.empty();
+        this.decide(this.agreed);
+    }
+}
+
+export function confirm(app: App, title: string, lines: string[], confirmText: string): Promise<boolean> {
+    return new Promise((resolve) => new ConfirmModal(app, title, lines, confirmText, resolve).open());
 }
