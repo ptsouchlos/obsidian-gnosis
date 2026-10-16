@@ -13,7 +13,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { App, TFile, notices, openedModals } from "./stubs/obsidian.js";
+import { App, notices, openedModals } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
 import type { Hit } from "../src/types.js";
 
@@ -89,18 +89,17 @@ test("every result resolves to a file in the vault", options, async () => {
 });
 
 test("related notes come back for a real note", options, async () => {
-    const { app, plugin } = await load(vault!);
+    const { plugin } = await load(vault!);
     run(plugin, "search");
     await waitFor("the search modal", () => openedModals.length > 0);
     const first = (openedModals.at(-1)!.type("the") as Hit[])[0];
     assert.ok(first, "nothing to ask about");
 
-    app.workspace.activeFile = new TFile(first.path, first.path.split("/").pop()!);
-    run(plugin, "related");
-    await waitFor("the related modal", () => openedModals.length > 1 || notices.length > 0);
-
+    // What the panel shows for this note, asked the way the panel asks.
+    const state = await plugin.relatedState(first.path);
+    assert.equal(state.kind, "ready", `got ${JSON.stringify(state)}`);
     assert.deepEqual(notices, [], "related should not have needed to explain itself");
-    const related = openedModals.at(-1)!.type("") as Hit[];
+    const related = (state as { hits: Hit[] }).hits;
     assert.ok(related.length > 0, `nothing related to ${first.path}`);
     assert.ok(
         !related.some((h) => h.path === first.path),
