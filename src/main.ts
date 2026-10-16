@@ -15,7 +15,7 @@
 //! own `Builder` for everything the index contains — see `build/job.ts`.
 
 import { Notice, Platform, Plugin } from "obsidian";
-import type { TFile } from "obsidian";
+import type { WorkspaceLeaf } from "obsidian";
 import type { Index } from "../vendor/gnosis-wasm/gnosis_wasm.js";
 import {
     ArtifactMissing,
@@ -41,8 +41,10 @@ import {
     type EmbedderFactory,
     type TextEmbedder,
 } from "./embedder.js";
-import { LexicalSearchModal, RelatedModal, SemanticSearchModal, type Display } from "./modals.js";
+import { LexicalSearchModal, SemanticSearchModal, type Display } from "./modals.js";
 import { queryModelFor } from "./models.js";
+import type { RelatedState } from "./related/follow.js";
+import { RELATED_VIEW, RelatedView } from "./related/view.js";
 import { withPresets } from "./ranking.js";
 import { DEFAULT_SETTINGS, GnosisSettingTab, type GnosisSettings } from "./settings.js";
 import { BrowserModelStore, type ModelStore } from "./model-store.js";
@@ -82,6 +84,8 @@ export default class GnosisPlugin extends Plugin {
     isMobile = (): boolean => Platform.isMobile;
 
     private building: AbortController | null = null;
+    /** An open in progress, shared by everyone who asks meanwhile. */
+    private opening: Promise<{ index: Index } | { error: unknown }> | null = null;
     /** Why the model last failed to load, until it is tried again. */
     private embedderError: string | null = null;
     /** The build's latest report, for the settings tab's card. */
@@ -102,19 +106,23 @@ export default class GnosisPlugin extends Plugin {
             },
         });
 
+        this.registerView(RELATED_VIEW, (leaf) => new RelatedView(leaf, this));
+        // The id is kept from when this opened a picker, so hotkeys survive.
         this.addCommand({
             id: "related",
-            name: "Related notes",
-            checkCallback: (checking) => {
-                const file = this.app.workspace.getActiveFile();
-                if (file === null) {
-                    return false;
-                }
-                if (!checking) {
-                    void this.openRelated(file);
-                }
-                return true;
+            name: "Show related notes",
+            callback: () => {
+                void this.revealRelated();
             },
+        });
+        // Shown once, the first time the plugin loads; after that the panel
+        // is wherever the reader left it, or closed if they closed it —
+        // Obsidian restores its layout.
+        this.app.workspace.onLayoutReady(() => {
+            if (!this.settings.relatedPanelShown) {
+                this.settings.relatedPanelShown = true;
+                void this.saveSettings().then(() => this.revealRelated(false));
+            }
         });
 
         this.addCommand({
@@ -166,29 +174,69 @@ export default class GnosisPlugin extends Plugin {
      * error, so it is reported once and not retried until asked again.
      */
     private async withIndex(): Promise<Index | null> {
+        const opened = await this.openIndex();
+        if ("index" in opened) {
+            return opened.index;
+        }
+        if (opened.error instanceof ArtifactMissing) {
+            new Notice(
+                `Gnosis: no index in ${this.settings.artifactDir} yet. Run "Build index" to ` +
+                    `build one here, or with the gnosis CLI:\n` +
+                    `  gnosis export --out ${this.settings.artifactDir}`,
+                10_000,
+            );
+        } else {
+            // A hash mismatch lands here, and it is worth showing verbatim: it
+            // means the artifact is half-synced, which is fixed by waiting
+            // rather than by re-exporting.
+            new Notice(`Gnosis: ${describe(opened.error)}`, 10_000);
+        }
+        return null;
+    }
+
+    /**
+     * Open the index, or say why not — without saying it to the reader.
+     *
+     * Commands report a failure as a notice; the related panel shows it in
+     * place, and would otherwise raise one on every note it follows. Opening
+     * is shared, so the panel and a search asking at once read the shards once.
+     */
+    private openIndex(): Promise<{ index: Index } | { error: unknown }> {
         if (this.index !== null) {
-            return this.index;
+            return Promise.resolve({ index: this.index });
         }
+        this.opening ??= openArtifact(this.app, this.settings.artifactDir).then(
+            (index) => {
+                this.opening = null;
+                this.index = index;
+                this.applySearchConfig();
+                return { index };
+            },
+            (error: unknown) => {
+                this.opening = null;
+                return { error };
+            },
+        );
+        return this.opening;
+    }
+
+    /** What the related panel shows for `path`. */
+    async relatedState(path: string): Promise<RelatedState> {
+        const opened = await this.openIndex();
+        if ("error" in opened) {
+            return opened.error instanceof ArtifactMissing
+                ? { kind: "no-index", dir: this.settings.artifactDir }
+                : { kind: "unreadable", message: describe(opened.error) };
+        }
+        let hits: Hit[];
         try {
-            this.index = await openArtifact(this.app, this.settings.artifactDir);
-            this.applySearchConfig();
-            return this.index;
-        } catch (error) {
-            if (error instanceof ArtifactMissing) {
-                new Notice(
-                    `Gnosis: no index in ${this.settings.artifactDir} yet. Run "Build index" to ` +
-                        `build one here, or with the gnosis CLI:\n` +
-                        `  gnosis export --out ${this.settings.artifactDir}`,
-                    10_000,
-                );
-            } else {
-                // A hash mismatch lands here, and it is worth showing
-                // verbatim: it means the artifact is half-synced, which is
-                // fixed by waiting rather than by re-exporting.
-                new Notice(`Gnosis: ${describe(error)}`, 10_000);
-            }
-            return null;
+            hits = opened.index.related(path, this.settings.limit, this.settings.relatedIncludeLinked, undefined) as Hit[];
+        } catch {
+            // The one way `related` fails on a readable index: the note is
+            // not in it, because it was written or renamed after the build.
+            return { kind: "stale", path };
         }
+        return hits.length === 0 ? { kind: "empty", path } : { kind: "ready", path, hits };
     }
 
     /**
@@ -216,6 +264,22 @@ export default class GnosisPlugin extends Plugin {
     closeIndex(): void {
         this.index?.free();
         this.index = null;
+        this.opening = null;
+        this.indexClosed();
+    }
+
+    /** Listeners told when the loaded index is dropped: the related panel's cache. */
+    private readonly closeListeners = new Set<() => void>();
+
+    onIndexClosed(listener: () => void): () => void {
+        this.closeListeners.add(listener);
+        return () => this.closeListeners.delete(listener);
+    }
+
+    private indexClosed(): void {
+        for (const listener of this.closeListeners) {
+            listener();
+        }
     }
 
     private async openSearch(): Promise<void> {
@@ -443,24 +507,20 @@ export default class GnosisPlugin extends Plugin {
         this.statusChanged();
     }
 
-    private async openRelated(file: TFile): Promise<void> {
-        const index = await this.withIndex();
-        if (index === null) {
-            return;
+    /** Open the related-notes panel in the right sidebar, or bring it forward. */
+    async revealRelated(focus = true): Promise<void> {
+        const workspace = this.app.workspace;
+        let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(RELATED_VIEW)[0] ?? null;
+        if (leaf === null) {
+            leaf = workspace.getRightLeaf(false);
+            if (leaf === null) {
+                return;
+            }
+            await leaf.setViewState({ type: RELATED_VIEW, active: focus });
         }
-        let hits: Hit[];
-        try {
-            hits = index.related(file.path, this.settings.limit, false, undefined) as Hit[];
-        } catch (error) {
-            // The commonest case by far: the note was written or renamed after
-            // the index was built. Saying so beats "no related notes found",
-            // which would read as an answer rather than as a stale index.
-            new Notice(`Gnosis: ${describe(error)}`, 8000);
-            return;
+        if (focus) {
+            await workspace.revealLeaf(leaf);
         }
-        new RelatedModal(this.app, this.display(), file, hits, (message) => {
-            new Notice(`Gnosis: ${message}`, 8000);
-        }).open();
     }
 
     /** Human-readable lines about the loaded index, for settings and notices. */

@@ -1,7 +1,7 @@
-//! The two model-free tiers, as pickers.
+//! Search, as pickers: keywords alone, or blended with meaning.
 
 import { Keymap, Platform, SuggestModal } from "obsidian";
-import type { App, PaneType, TFile } from "obsidian";
+import type { App, PaneType } from "obsidian";
 import type { Hit } from "./types.js";
 import { formatScore, hitSnippet, hitSubtitle, noteName, resolveHit } from "./results.js";
 
@@ -99,43 +99,6 @@ export class LexicalSearchModal extends HitModal {
         // Nothing to rank for an empty query, and asking would return an
         // arbitrary slice of the corpus.
         return query.trim() === "" ? [] : this.runSearch(query);
-    }
-
-    protected override showMissing(hit: Hit): void {
-        this.notify(`${hit.path} is in the index but not in the vault — run "Build index" to update it.`);
-    }
-}
-
-/**
- * Related notes for one file: the other model-free tier, and the one at full
- * quality, since both sides of the comparison are vectors the artifact
- * already carries.
- */
-export class RelatedModal extends HitModal {
-    constructor(
-        app: App,
-        display: Display,
-        file: TFile,
-        private readonly hits: Hit[],
-        private readonly notify: (message: string) => void,
-    ) {
-        super(app, display);
-        this.setPlaceholder(`Related to ${file.basename}`);
-        this.emptyStateText = "Nothing related found.";
-    }
-
-    override getSuggestions(query: string): Hit[] {
-        const needle = query.trim().toLowerCase();
-        if (needle === "") {
-            return this.hits;
-        }
-        // Filtering, not re-ranking: the ranking came from the vectors, and
-        // typing here narrows what is already ranked.
-        return this.hits.filter(
-            (hit) =>
-                noteName(hit).toLowerCase().includes(needle) ||
-                hit.path.toLowerCase().includes(needle),
-        );
     }
 
     protected override showMissing(hit: Hit): void {

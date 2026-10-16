@@ -48,6 +48,10 @@ export interface GnosisSettings {
     showScores: boolean;
     /** Leave out what Obsidian's "Excluded files" leaves out, when building. */
     honorExcluded: boolean;
+    /** Whether the related panel lists notes the active one already links to. */
+    relatedIncludeLinked: boolean;
+    /** Set once the related panel has been opened for the reader, so closing it sticks. */
+    relatedPanelShown: boolean;
 }
 
 /**
@@ -73,6 +77,8 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     keyboardHints: true,
     showScores: false,
     honorExcluded: true,
+    relatedIncludeLinked: false,
+    relatedPanelShown: false,
 };
 
 /** Where the footer's links go. */

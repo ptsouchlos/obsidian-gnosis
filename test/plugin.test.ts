@@ -13,8 +13,9 @@ import test from "node:test";
 // Imported by path rather than as `obsidian`: the plugin's own import is
 // aliased to this same file at bundle time, so both sides share one module
 // instance, and the test type-checks against the stub it actually drives.
-import { App, TFile, notices, openedModals } from "./stubs/obsidian.js";
+import { App, notices, openedModals } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
+import { RelatedFollower } from "../src/related/follow.js";
 import { formatScore } from "../src/results.js";
 import type { Hit } from "../src/types.js";
 
@@ -237,14 +238,10 @@ test("choosing a result whose note is gone says so instead of doing nothing", as
 });
 
 test("related notes exclude the note itself and the ones it already links to", async () => {
-    const { app, plugin } = await load();
-    app.workspace.activeFile = new TFile("notes/sourdough.md", "sourdough");
-    run(plugin, "related");
-    await aModal();
-
-    const modal = openedModals.at(-1)!;
-    const hits = modal.type("") as Hit[];
-    const paths = hits.map((h) => h.path);
+    const { plugin } = await load();
+    const state = await plugin.relatedState("notes/sourdough.md");
+    assert.equal(state.kind, "ready");
+    const paths = (state as { hits: Hit[] }).hits.map((h) => h.path);
     assert.ok(!paths.includes("notes/sourdough.md"), `got ${JSON.stringify(paths)}`);
     assert.ok(
         !paths.includes("notes/hydration.md"),
@@ -252,27 +249,77 @@ test("related notes exclude the note itself and the ones it already links to", a
     );
     assert.ok(paths.length > 0, "something unlinked should remain");
 
-    // Typing in the related picker filters what is already ranked.
-    assert.deepEqual(
-        (modal.type("planner") as Hit[]).map((h) => h.path),
-        paths.filter((p) => p.includes("planner")),
-    );
+    plugin.settings.relatedIncludeLinked = true;
+    const linked = (await plugin.relatedState("notes/sourdough.md")) as { hits: Hit[] };
+    assert.ok(linked.hits.some((h) => h.path === "notes/hydration.md"), "unless asked to include them");
 });
 
-test("related on a note the index has never seen reports it", async () => {
-    const { app, plugin } = await load();
-    app.workspace.activeFile = new TFile(
-        "notes/written-after-the-export.md",
-        "written-after-the-export",
-    );
-    run(plugin, "related");
-    await aNotice();
+test("related on a note the index has never seen says the index is older than the note", async () => {
+    const { plugin } = await load();
+    const state = await plugin.relatedState("notes/written-after-the-export.md");
+    assert.deepEqual(state, { kind: "stale", path: "notes/written-after-the-export.md" });
+    assert.deepEqual(notices, [], "said in the panel, never as a notice");
+});
 
-    assert.equal(openedModals.length, 0, "there is nothing to pick from");
-    assert.ok(
-        notices.some((n) => n.includes("is not indexed")),
-        `expected a stale-index notice, got ${JSON.stringify(notices)}`,
-    );
+test("related with no index says so in place, with no notice", async () => {
+    const { plugin } = await load({ artifactDir: "not/here" });
+    assert.deepEqual(await plugin.relatedState("notes/sourdough.md"), { kind: "no-index", dir: "not/here" });
+    assert.deepEqual(notices, []);
+});
+
+test("the panel follows the active note, stays put while pinned, and catches up after", async () => {
+    const { plugin } = await load();
+    const asked: string[] = [];
+    const follower = new RelatedFollower(async (path) => {
+        asked.push(path);
+        return plugin.relatedState(path);
+    });
+
+    assert.deepEqual(await follower.follow(null), { kind: "no-note" });
+    const first = await follower.follow("notes/sourdough.md");
+    assert.equal(first?.kind, "ready");
+    assert.equal(await follower.follow("notes/sourdough.md"), null, "the same note again changes nothing");
+
+    follower.pinned = true;
+    assert.equal(await follower.follow("notes/hydration.md"), null, "pinned: the panel stays on sourdough");
+    assert.equal(follower.path, "notes/sourdough.md");
+
+    follower.pinned = false;
+    const second = await follower.follow("notes/hydration.md");
+    assert.equal(second?.kind, "ready");
+    assert.equal(follower.path, "notes/hydration.md");
+
+    // Back to a note it has already answered: from the cache, not the index.
+    await follower.follow("notes/sourdough.md");
+    assert.deepEqual(asked, ["notes/sourdough.md", "notes/hydration.md"]);
+    follower.invalidate();
+    await follower.current();
+    assert.deepEqual(asked.at(-1), "notes/sourdough.md", "after the index changes, asked again");
+    assert.equal(asked.length, 3);
+});
+
+test("the related command opens the panel in the sidebar, once", async () => {
+    const { app, plugin } = await load();
+    run(plugin, "related");
+    await waitFor("the panel", () => app.workspace.getLeavesOfType("gnosis-related").length === 1);
+    run(plugin, "related");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(app.workspace.getLeavesOfType("gnosis-related").length, 1, "revealed, not opened twice");
+});
+
+test("the panel opens by itself the first time, and never again once closed", async () => {
+    const { app, plugin } = await load();
+    for (const ready of app.workspace.layoutReady) ready();
+    await waitFor("the panel", () => app.workspace.getLeavesOfType("gnosis-related").length === 1);
+    assert.equal(plugin.settings.relatedPanelShown, true);
+
+    // The reader closes it; the next load leaves it closed.
+    app.workspace.leaves.length = 0;
+    const again = await load();
+    again.plugin.settings.relatedPanelShown = true;
+    for (const ready of again.app.workspace.layoutReady) ready();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(again.app.workspace.getLeavesOfType("gnosis-related").length, 0);
 });
 
 test("a vault with no artifact is told how to build one", async () => {
