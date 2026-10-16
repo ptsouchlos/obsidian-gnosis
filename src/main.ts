@@ -41,7 +41,7 @@ import {
     type EmbedderFactory,
     type TextEmbedder,
 } from "./embedder.js";
-import { LexicalSearchModal, RelatedModal, SemanticSearchModal } from "./modals.js";
+import { LexicalSearchModal, RelatedModal, SemanticSearchModal, type Display } from "./modals.js";
 import { queryModelFor } from "./models.js";
 import { withPresets } from "./ranking.js";
 import { DEFAULT_SETTINGS, GnosisSettingTab, type GnosisSettings } from "./settings.js";
@@ -198,6 +198,12 @@ export default class GnosisPlugin extends Plugin {
         this.index.setSearchConfig(withPresets(base, this.settings.strategy, this.settings.titleBonus));
     }
 
+    /** How pickers show and open results, as the settings say now. */
+    private display(): Display {
+        const { modOpen, keyboardHints, showScores } = this.settings;
+        return { modOpen, keyboardHints, showScores };
+    }
+
     /** Drop the loaded index, so the next search re-reads the artifact. */
     closeIndex(): void {
         this.index?.free();
@@ -223,7 +229,7 @@ export default class GnosisPlugin extends Plugin {
 
         const space = this.settings.semanticSearch ? this.semanticSpace(index) : null;
         if (space === null) {
-            new LexicalSearchModal(this.app, lexical, notify).open();
+            new LexicalSearchModal(this.app, this.display(), lexical, notify).open();
             return;
         }
 
@@ -232,6 +238,7 @@ export default class GnosisPlugin extends Plugin {
         this.startEmbedder(space).catch(() => {});
         new SemanticSearchModal(
             this.app,
+            this.display(),
             async (query) => {
                 const embedder = this.embedder?.ready ?? null;
                 if (embedder === null) {
@@ -359,7 +366,7 @@ export default class GnosisPlugin extends Plugin {
             new Notice(`Gnosis: ${describe(error)}`, 8000);
             return;
         }
-        new RelatedModal(this.app, file, hits, (message) => {
+        new RelatedModal(this.app, this.display(), file, hits, (message) => {
             new Notice(`Gnosis: ${message}`, 8000);
         }).open();
     }

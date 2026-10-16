@@ -3,7 +3,7 @@
 //! place that says what the index is doing right now.
 
 import { PluginSettingTab, Setting, setIcon } from "obsidian";
-import type { App } from "obsidian";
+import type { App, PaneType } from "obsidian";
 import type GnosisPlugin from "./main.js";
 import { DEFAULT_BUILD_MODEL, QUERY_MODELS } from "./models.js";
 import type { Strategy, TitleBonus } from "./ranking.js";
@@ -40,6 +40,12 @@ export interface GnosisSettings {
     strategy: Strategy;
     /** How much a note's title counts; see `ranking.ts`. */
     titleBonus: TitleBonus;
+    /** Where Cmd/Ctrl opens a result. A plain choice opens in the current tab. */
+    modOpen: PaneType;
+    /** The key hints under a picker's results. */
+    keyboardHints: boolean;
+    /** Each result's score beside its title. */
+    showScores: boolean;
 }
 
 export const DEFAULT_SETTINGS: GnosisSettings = {
@@ -49,6 +55,9 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     buildModel: DEFAULT_BUILD_MODEL,
     strategy: "balanced",
     titleBonus: "default",
+    modOpen: "tab",
+    keyboardHints: true,
+    showScores: false,
 };
 
 /** Where the footer's links go. */
@@ -219,6 +228,52 @@ export class GnosisSettingTab extends PluginSettingTab {
             );
         };
         drawSearch();
+
+        this.heading(containerEl, "Display");
+
+        const modOpen = this.card(new Setting(containerEl))
+            .setName("Open results with Cmd/Ctrl in")
+            .setDesc(
+                "Where a result opens when you hold Cmd/Ctrl while clicking or pressing Enter. A " +
+                    "plain click or Enter always opens it in the current tab.",
+            );
+        segmented<PaneType>(
+            modOpen.controlEl,
+            "Open results with Cmd/Ctrl in",
+            [
+                { value: "tab", label: "New tab" },
+                { value: "split", label: "New split" },
+                { value: "window", label: "New window" },
+            ],
+            this.plugin.settings.modOpen,
+            async (value) => {
+                this.plugin.settings.modOpen = value;
+                await this.plugin.saveSettings();
+            },
+        );
+
+        this.card(new Setting(containerEl))
+            .setName("Keyboard hints")
+            .setDesc("Show the keys for navigating and opening results under the search box.")
+            .addToggle((toggle) =>
+                toggle.setValue(this.plugin.settings.keyboardHints).onChange(async (on) => {
+                    this.plugin.settings.keyboardHints = on;
+                    await this.plugin.saveSettings();
+                }),
+            );
+
+        this.card(new Setting(containerEl))
+            .setName("Show scores")
+            .setDesc(
+                "Show each result's score beside its title. Higher is a closer match; for related " +
+                    "notes it is how similar the two notes are.",
+            )
+            .addToggle((toggle) =>
+                toggle.setValue(this.plugin.settings.showScores).onChange(async (on) => {
+                    this.plugin.settings.showScores = on;
+                    await this.plugin.saveSettings();
+                }),
+            );
 
         this.heading(containerEl, "Model");
 

@@ -15,6 +15,7 @@ import test from "node:test";
 // instance, and the test type-checks against the stub it actually drives.
 import { App, TFile, notices, openedModals } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
+import { formatScore } from "../src/results.js";
 import type { Hit } from "../src/types.js";
 
 /** The fixture vault's absolute path, injected by `test/build.mjs`. */
@@ -143,6 +144,64 @@ test("choosing a result opens that note", async () => {
     assert.deepEqual(app.workspace.opened, ["notes/hydration.md"]);
 });
 
+test("Cmd/Ctrl opens a result where the reader chose; a plain choice opens in place", async () => {
+    const { app, plugin } = await load();
+    plugin.settings.modOpen = "split";
+    run(plugin, "search");
+    await aModal();
+    const modal = openedModals.at(-1)!;
+    const hit = (modal.type("baker's percentages") as Hit[])[0]!;
+
+    modal.choose(hit);
+    modal.choose(hit, { ctrlKey: true });
+    // Obsidian's own Cmd/Ctrl+Alt+Shift still means a window.
+    modal.choose(hit, { ctrlKey: true, altKey: true, shiftKey: true });
+    assert.deepEqual(app.workspace.panes, [false, "split", "window"]);
+    assert.ok(
+        (modal as never as { keys: Map<string, unknown> }).keys.has("Mod+Enter"),
+        "Cmd/Ctrl+Enter is bound, or only a click could use the setting",
+    );
+});
+
+test("keyboard hints name where Cmd/Ctrl opens, and can be turned off", async () => {
+    const { plugin } = await load();
+    plugin.settings.modOpen = "window";
+    run(plugin, "search");
+    await aModal();
+    const hints = (openedModals.at(-1) as never as { instructions: { purpose: string }[] }).instructions;
+    assert.ok(hints.some((h) => h.purpose === "to open in a new window"), JSON.stringify(hints));
+
+    const off = await load();
+    off.plugin.settings.keyboardHints = false;
+    run(off.plugin, "search");
+    await aModal();
+    assert.deepEqual((openedModals.at(-1) as never as { instructions: unknown[] }).instructions, []);
+});
+
+test("scores keep two significant figures, so keyword-only scores stay distinct", () => {
+    assert.equal(formatScore(0.0318), "0.032");
+    assert.equal(formatScore(0.0283), "0.028");
+    assert.equal(formatScore(0.7554), "0.76");
+});
+
+test("scores are shown only when asked for", async () => {
+    const { plugin } = await load();
+    run(plugin, "search");
+    await aModal();
+    const hit = (openedModals.at(-1)!.type("baker's percentages") as Hit[])[0]!;
+    const hidden = fakeEl();
+    openedModals.at(-1)!.renderSuggestion(hit, hidden as never);
+    assert.ok(!hidden.texts.includes(formatScore(hit.score)));
+
+    const shown = await load();
+    shown.plugin.settings.showScores = true;
+    run(shown.plugin, "search");
+    await aModal();
+    const el = fakeEl();
+    openedModals.at(-1)!.renderSuggestion(hit, el as never);
+    assert.equal(el.texts[0], formatScore(hit.score), "the score comes first, as a badge");
+});
+
 test("a result renders its title, locator and snippet", async () => {
     const { plugin } = await load();
     run(plugin, "search");
@@ -152,7 +211,8 @@ test("a result renders its title, locator and snippet", async () => {
     const hits = modal.type("baker's percentages") as Hit[];
     const el = fakeEl();
     modal.renderSuggestion(hits[0]!, el as never);
-    assert.deepEqual(el.texts.slice(0, 2), ["Hydration", "Hydration"]);
+    // The file's name, as Obsidian shows a note — not its H1, "Hydration".
+    assert.deepEqual(el.texts.slice(0, 2), ["hydration", "Hydration"]);
     assert.match(el.texts[2]!, /Baker's percentages/);
 });
 
