@@ -16,10 +16,24 @@ interface ManifestView {
         space: string;
         model: { id: string; pooling: string; dim: number; query_prefix: string; document_prefix: string };
     }[];
+    shard_docs: number;
     shards: { documents: number }[];
 }
 
 export type Planned = { spec: BuildSpec } | { refuse: string };
+
+/**
+ * Notes per shard in an index built here.
+ *
+ * Smaller than the CLI's 256 because each update rewrites, and a syncer
+ * uploads, every shard holding a changed note. Measured on a 224-note vault
+ * and a 20x copy of it: an edit to one note writes ~0.4 MB at 32, against
+ * ~2.6 MB at 256, with the same open time and under 0.5% more on disk. Below
+ * 32 an edit gets cheaper, but adding notes reshuffles every shard twice as
+ * often: gnosis places a note by `hash mod shard_count`, so each time the
+ * count of shards grows, every shard is rewritten.
+ */
+export const SHARD_DOCS = 32;
 
 /**
  * Rebuild an existing index: the same model, pooling, prefixes, dimension,
@@ -29,8 +43,14 @@ export type Planned = { spec: BuildSpec } | { refuse: string };
  * carries a note's vectors over from an artifact built the same way. And the
  * reader chose them, possibly with the CLI on another machine; a rebuild here
  * should not quietly change what their index is.
+ *
+ * The one exception is the shard size of an index this device wrote, which
+ * moves to `SHARD_DOCS`. That costs one rewrite of every shard and no
+ * embedding, since notes are reused by content, not by shard. An index the
+ * CLI or another device wrote keeps its own, or a rebuild here would move
+ * every note between shards.
  */
-export function specFromManifest(manifestJson: string, vaultName: string): Planned {
+export function specFromManifest(manifestJson: string, vaultName: string, writtenHere: boolean): Planned {
     const manifest = JSON.parse(manifestJson) as ManifestView;
     const text = manifest.spaces.find((s) => s.space === "text");
     if (text === undefined) {
@@ -57,6 +77,7 @@ export function specFromManifest(manifestJson: string, vaultName: string): Plann
             root: vaultName,
             quantization: manifest.quantization,
             compression: manifest.compression,
+            shardDocs: writtenHere ? SHARD_DOCS : manifest.shard_docs,
         },
     };
 }
@@ -75,6 +96,7 @@ export function specForNewIndex(modelId: string, vaultName: string): Planned {
             queryPrefix: model.queryPrefix,
             documentPrefix: model.documentPrefix,
             root: vaultName,
+            shardDocs: SHARD_DOCS,
         },
     };
 }

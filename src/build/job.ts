@@ -36,6 +36,8 @@ export interface BuildSpec {
     root: string;
     quantization?: "f32" | "f16" | "i8";
     compression?: "none" | "deflate";
+    /** Notes per shard; gnosis's default, the CLI's, is 256. */
+    shardDocs?: number;
 }
 
 /** One note, read lazily: most notes in an incremental build are reused. */
