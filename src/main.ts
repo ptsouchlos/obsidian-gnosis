@@ -56,6 +56,7 @@ import { RELATED_VIEW, RelatedView } from "./related/view.js";
 import { withPresets } from "./ranking.js";
 import { DEFAULT_SETTINGS, GnosisSettingTab, type GnosisSettings } from "./settings.js";
 import { BrowserModelStore, type ModelStore } from "./model-store.js";
+import { AutoUpdater } from "./auto-update.js";
 import { vaultStaleness, stalenessLine, type Staleness } from "./staleness.js";
 import { indexStatus, modelStatus, type IndexStatus, type ModelStatus } from "./status.js";
 import type { Hit, IndexInfo, SpaceInfo } from "./types.js";
@@ -96,6 +97,10 @@ export default class GnosisPlugin extends Plugin {
     isMobile = (): boolean => Platform.isMobile;
     /** This session's events and timings, for the diagnostics report. */
     readonly diagnostics = new Diagnostics();
+    /** Updates the index once edits settle; tests drive it with a fake clock. */
+    autoUpdater = new AutoUpdater(() => this.autoUpdate());
+    /** Why the last automatic update was skipped, until a build settles it. */
+    autoSkipped: string | null = null;
 
     private building: AbortController | null = null;
     /** An open in progress, shared by everyone who asks meanwhile. */
@@ -143,6 +148,27 @@ export default class GnosisPlugin extends Plugin {
             }
         });
 
+        // Not before layout is ready: while it loads, Obsidian reports every
+        // file in the vault as created.
+        this.app.workspace.onLayoutReady(() => {
+            const changed = (path: string) => {
+                if (this.isIndexed(path)) {
+                    this.autoUpdater.poke();
+                }
+            };
+            this.registerEvent(this.app.vault.on("modify", (file) => changed(file.path)));
+            this.registerEvent(this.app.vault.on("create", (file) => changed(file.path)));
+            this.registerEvent(this.app.vault.on("delete", (file) => changed(file.path)));
+            this.registerEvent(
+                this.app.vault.on("rename", (file, oldPath) => {
+                    changed(file.path);
+                    changed(oldPath);
+                }),
+            );
+            // Notes may have changed while Obsidian was closed, or synced in.
+            this.autoUpdater.poke(STARTUP_DELAY_MS);
+        });
+
         this.addCommand({
             id: "build-index",
             name: "Build index",
@@ -177,6 +203,7 @@ export default class GnosisPlugin extends Plugin {
     }
 
     override onunload(): void {
+        this.autoUpdater.stop();
         // A build in flight checkpoints on its way out, so the next one resumes.
         this.building?.abort();
         this.stopEmbedder();
@@ -423,8 +450,12 @@ export default class GnosisPlugin extends Plugin {
         this.stopEmbedder();
     }
 
-    /** Start (or reuse) the embedder for `space`'s model, reporting the download. */
-    private startEmbedder(space: SpaceInfo): Promise<TextEmbedder> {
+    /**
+     * Start (or reuse) the embedder for `space`'s model, reporting the
+     * download unless `quiet`: an automatic update loads it unseen, as it was
+     * already downloaded with the reader's consent.
+     */
+    private startEmbedder(space: SpaceInfo, quiet = false): Promise<TextEmbedder> {
         const key = embedderKey(space);
         if (this.embedder?.key === key) {
             return this.embedder.starting;
@@ -436,9 +467,11 @@ export default class GnosisPlugin extends Plugin {
             return Promise.reject(new Error(`no download is known for '${space.queryModel}'`));
         }
         const progress = new DownloadNotice();
-        const starting = this.embedderFactory(model, space.pooling as "cls" | "mean", (p) =>
-            progress.update(p),
-        );
+        const starting = this.embedderFactory(model, space.pooling as "cls" | "mean", (p) => {
+            if (!quiet) {
+                progress.update(p);
+            }
+        });
         const state: EmbedderState = { key, starting, ready: null };
         this.embedder = state;
         this.embedderError = null;
@@ -639,15 +672,19 @@ export default class GnosisPlugin extends Plugin {
      * completed, and only after the reader has agreed if another device or
      * the CLI wrote it.
      */
-    async buildIndex(): Promise<void> {
+    async buildIndex(auto = false): Promise<void> {
         if (this.building !== null) {
-            new Notice("Gnosis: an index build is already running");
+            if (!auto) {
+                new Notice("Gnosis: an index build is already running");
+            }
             return;
         }
         if (this.isMobile()) {
             // Embedding a whole vault on a phone is a different proposition:
             // build on a desktop, and let this device read the result.
-            new Notice("Gnosis: building an index is desktop-only — build on a desktop and sync it here", 10_000);
+            if (!auto) {
+                new Notice("Gnosis: building an index is desktop-only — build on a desktop and sync it here", 10_000);
+            }
             return;
         }
         const controller = new AbortController();
@@ -656,11 +693,14 @@ export default class GnosisPlugin extends Plugin {
         const startedAt = this.diagnostics.now();
         let run: BuildRun = { outcome: "not started" };
         try {
-            run = await this.runBuildCommand(controller.signal);
+            run = await this.runBuildCommand(controller.signal, auto);
         } catch (error) {
             run = { outcome: "failed", error: describe(error) };
             new Notice(`Gnosis: the index build failed — ${describe(error)}. The existing index is unchanged.`, 10_000);
         } finally {
+            // Any build that ran settles the question an automatic one was
+            // skipped over; a skip states the new reason.
+            this.autoSkipped = run.skipped ?? (run.outcome === "not started" ? this.autoSkipped : null);
             this.recordBuild(startedAt, run);
             this.building = null;
             this.buildProgress = null;
@@ -761,7 +801,12 @@ export default class GnosisPlugin extends Plugin {
         );
     }
 
-    private async runBuildCommand(signal: AbortSignal): Promise<BuildRun> {
+    /**
+     * One build. `auto` is an update nobody asked for: it never prompts, so
+     * each question a build would ask becomes a reason it was skipped, and it
+     * keeps quiet when it succeeds. A failure or a cancel still says so.
+     */
+    private async runBuildCommand(signal: AbortSignal, auto: boolean): Promise<BuildRun> {
         const dir = this.settings.artifactDir;
         const vaultName = this.app.vault.getName();
 
@@ -779,12 +824,18 @@ export default class GnosisPlugin extends Plugin {
             ? specForNewIndex(this.settings.buildModel, vaultName)
             : specFromManifest(live.manifestJson, vaultName, liveHash === this.lastWritten());
         if ("refuse" in planned) {
+            if (auto) {
+                return { outcome: "not started", error: planned.refuse, skipped: planned.refuse };
+            }
             new Notice(`Gnosis: ${planned.refuse}`, 10_000);
             return { outcome: "not started", error: planned.refuse };
         }
         const spec = planned.spec;
 
         if (live !== null && liveHash !== this.lastWritten()) {
+            if (auto) {
+                return { outcome: "not started", skipped: SKIP_WRITTEN_ELSEWHERE };
+            }
             if (!(await this.confirmReplace(replaceWarning(live.manifestJson, vaultName)))) {
                 return { outcome: "not started" };
             }
@@ -792,11 +843,16 @@ export default class GnosisPlugin extends Plugin {
 
         const space = specSpace(spec);
         const model = queryModelFor(spec.model)!;
-        const consented = this.settings.semanticSearch && this.embedder?.key === embedderKey(space);
+        if (auto && !this.settings.semanticSearch) {
+            // Turned off, or the model deleted: either way, not a download
+            // to start unasked.
+            return { outcome: "not started", skipped: SKIP_NO_MODEL };
+        }
+        const consented = this.settings.semanticSearch && (auto || this.embedder?.key === embedderKey(space));
         if (!consented && !(await this.askConsent(downloadsFor(spec.model, model, RUNTIME)))) {
             return { outcome: "not started" };
         }
-        const embedder = await this.startEmbedder(space);
+        const embedder = await this.startEmbedder(space, auto);
         await startWasm();
 
         const vault = this.vaultKey();
@@ -806,7 +862,7 @@ export default class GnosisPlugin extends Plugin {
         if (saved !== null && !resuming) {
             await this.checkpoints.clear(vault);
         }
-        if (resuming) {
+        if (resuming && !auto) {
             new Notice("Gnosis: resuming the interrupted index build");
         }
 
@@ -851,6 +907,9 @@ export default class GnosisPlugin extends Plugin {
         }
         const currentHash = current === null ? null : await manifestHash(current.manifestJson);
         if (current !== null && currentHash !== liveHash && currentHash !== this.lastWritten()) {
+            if (auto) {
+                return { outcome: "not written", result, skipped: SKIP_WRITTEN_ELSEWHERE };
+            }
             if (!(await this.confirmReplace(replaceWarning(current.manifestJson, vaultName)))) {
                 return { outcome: "not written", result };
             }
@@ -859,7 +918,9 @@ export default class GnosisPlugin extends Plugin {
         const written = await writeArtifact(this.app.vault.adapter, dir, result.artifact);
         await this.checkpoints.clear(vault);
         if (written.upToDate) {
-            new Notice(`Gnosis: the index is already up to date — ${result.documents.toLocaleString()} notes`);
+            if (!auto) {
+                new Notice(`Gnosis: the index is already up to date — ${result.documents.toLocaleString()} notes`);
+            }
             return { outcome: "already up to date", result, shardsWritten: 0 };
         }
         this.app.saveLocalStorage(LAST_WRITTEN_KEY, await manifestHash(result.artifact.manifestJson));
@@ -870,13 +931,15 @@ export default class GnosisPlugin extends Plugin {
             this.settings.semanticSearch = true;
             await this.saveSettings();
         }
-        new Notice(
-            `Gnosis: indexed ${result.documents.toLocaleString()} notes, ` +
-                `${result.chunks.toLocaleString()} chunks — ${result.chunksEmbedded.toLocaleString()} ` +
-                `embedded, ${result.notesReused.toLocaleString()} notes unchanged; ` +
-                `${written.written} of ${written.written + written.unchanged} shard(s) written.`,
-            10_000,
-        );
+        if (!auto) {
+            new Notice(
+                `Gnosis: indexed ${result.documents.toLocaleString()} notes, ` +
+                    `${result.chunks.toLocaleString()} chunks — ${result.chunksEmbedded.toLocaleString()} ` +
+                    `embedded, ${result.notesReused.toLocaleString()} notes unchanged; ` +
+                    `${written.written} of ${written.written + written.unchanged} shard(s) written.`,
+                10_000,
+            );
+        }
         return { outcome: "indexed", result, shardsWritten: written.written };
     }
 
@@ -887,20 +950,58 @@ export default class GnosisPlugin extends Plugin {
      * stays out of this one too.
      */
     private notes(): Note[] {
-        // Obsidian's own matcher, not public API: without it, nothing is
-        // excluded rather than anything guessed.
-        const ignored = (this.app.metadataCache as { isUserIgnored?: (path: string) => boolean }).isUserIgnored;
-        const skip = (path: string) =>
-            this.settings.honorExcluded && typeof ignored === "function" && ignored.call(this.app.metadataCache, path);
         return this.app.vault
             .getMarkdownFiles()
-            // The diagnostics report is about the plugin, not one of the notes.
-            .filter((file) => file.path !== REPORT_PATH && !skip(file.path))
+            .filter((file) => this.isIndexed(file.path))
             .map((file) => ({
             path: file.path,
             mtime: file.stat.mtime,
             read: () => this.app.vault.cachedRead(file),
         }));
+    }
+
+    /** Whether a build includes the markdown file at `path`. */
+    private isIndexed(path: string): boolean {
+        // The diagnostics report is about the plugin, not one of the notes.
+        if (!path.endsWith(".md") || path === REPORT_PATH) {
+            return false;
+        }
+        // Obsidian's own matcher, not public API: without it, nothing is
+        // excluded rather than anything guessed.
+        const ignored = (this.app.metadataCache as { isUserIgnored?: (path: string) => boolean }).isUserIgnored;
+        return !(this.settings.honorExcluded && typeof ignored === "function" && ignored.call(this.app.metadataCache, path));
+    }
+
+    /**
+     * Update the index now, if that is worth doing and needs nobody's say.
+     *
+     * Only when the setting is on, on a desktop, with an index to update and
+     * notes that differ from it. Everything a build would ask the reader
+     * becomes a reason it skipped (`runBuildCommand`), which the card shows.
+     */
+    async autoUpdate(): Promise<void> {
+        if (!this.settings.autoUpdate || this.isMobile()) {
+            return;
+        }
+        if (this.building !== null) {
+            // Whatever changed since it started, the next update picks up.
+            this.autoUpdater.poke();
+            return;
+        }
+        const stale = await this.vaultStaleness();
+        if (stale === null) {
+            // No index, or one that will not open: a first build is the
+            // reader's to start, and an unreadable index is the card's to report.
+            return;
+        }
+        if (stale.changed.length + stale.added.length + stale.removed.length === 0) {
+            return;
+        }
+        this.diagnostics.record(
+            "build",
+            `automatic update: ${stale.changed.length} changed, ${stale.added.length} new, ${stale.removed.length} deleted`,
+        );
+        await this.buildIndex(true);
     }
 
     /**
@@ -1054,7 +1155,17 @@ interface BuildRun {
     result?: BuildResult;
     shardsWritten?: number;
     error?: string;
+    /** Why an automatic update did not run, in words for the index card. */
+    skipped?: string;
 }
+
+/** How long after startup the first automatic check runs, so it never slows opening a vault. */
+const STARTUP_DELAY_MS = 30_000;
+
+/** Why an automatic update was skipped; the card shows these as they are. */
+const SKIP_WRITTEN_ELSEWHERE =
+    "Not updated automatically: another device or the gnosis CLI wrote this index. Update it here to take it over.";
+const SKIP_NO_MODEL = "Not updated automatically: semantic search is off, so the model is not loaded.";
 
 function platformName(): string {
     const os = Platform.isMacOS ? "macOS" : Platform.isWin ? "Windows" : Platform.isLinux ? "Linux"
