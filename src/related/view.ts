@@ -265,6 +265,7 @@ export class RelatedView extends ItemView {
             dot.createSvg("title").textContent = noteName(hit);
             dot.createSvg("circle", { attr: { r: 3.5 } });
             dot.createSvg("text", { attr: { y: -6 } }).textContent = hit.score.toFixed(2);
+            this.previewOnHover(dot, hit);
             dot.addEventListener("click", (evt) => this.openHit(hit, evt));
             dot.addEventListener("keydown", (evt) => {
                 if (evt.key === "Enter") {
@@ -291,22 +292,7 @@ export class RelatedView extends ItemView {
                 evt.preventDefault();
                 this.openHit(hit, evt);
             });
-            // Page preview, as for any link in Obsidian: the core plugin shows
-            // it, with or without Cmd/Ctrl as its settings say for this panel.
-            link.addEventListener("mouseover", (evt) => {
-                const file = resolveHit(this.app, hit);
-                if (file === null) {
-                    return;
-                }
-                this.app.workspace.trigger("hover-link", {
-                    event: evt,
-                    source: RELATED_VIEW,
-                    hoverParent: this,
-                    targetEl: link,
-                    linktext: file.path,
-                    sourcePath: this.follower.path ?? "",
-                });
-            });
+            this.previewOnHover(link, hit);
             // A middle click opens a new tab, as everywhere else in Obsidian.
             link.addEventListener("auxclick", (evt) => {
                 if (evt.button === 1) {
@@ -329,6 +315,35 @@ export class RelatedView extends ItemView {
                 row.toggleClass("is-open", open);
             });
             return row;
+        });
+    }
+
+    /**
+     * Page preview, as for any link in Obsidian: the core plugin shows it,
+     * with or without Cmd/Ctrl as its settings say for this panel. Dots and
+     * rows share it, so both follow the one setting.
+     */
+    private previewOnHover(el: HTMLElement | SVGElement, hit: Hit): void {
+        if (el instanceof SVGElement) {
+            // The popover sizes its target by `offsetHeight` / `offsetWidth`,
+            // which SVG elements lack: it would land at NaN, off the screen.
+            for (const [prop, side] of [["offsetHeight", "height"], ["offsetWidth", "width"]] as const) {
+                Object.defineProperty(el, prop, { get: () => el.getBoundingClientRect()[side] });
+            }
+        }
+        el.addEventListener("mouseover", (evt) => {
+            const file = resolveHit(this.app, hit);
+            if (file === null) {
+                return;
+            }
+            this.app.workspace.trigger("hover-link", {
+                event: evt,
+                source: RELATED_VIEW,
+                hoverParent: this,
+                targetEl: el,
+                linktext: file.path,
+                sourcePath: this.follower.path ?? "",
+            });
         });
     }
 
