@@ -15,6 +15,8 @@ import test from "node:test";
 import { App, notices } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
 import { MemoryCheckpoints } from "../src/build/checkpoints.js";
+import { MemoryModelStore } from "../src/model-store.js";
+import { RUNTIMES } from "../src/embedder.js";
 import { SHARD_DOCS, replaceWarning, specForNewIndex, specFromManifest, statusLine } from "../src/build/plan.js";
 import type { TextEmbedder } from "../src/embedder.js";
 import type { IndexInfo } from "../src/types.js";
@@ -51,8 +53,12 @@ class HashEmbedder implements TextEmbedder {
 
     constructor(private readonly dim: number) {}
 
+    /** How many texts each call carried. */
+    readonly batches: number[] = [];
+
     async embed(texts: string[]): Promise<Float32Array[]> {
         this.seen.push(...texts);
+        this.batches.push(texts.length);
         const out = texts.map((t) => hashVector(t, this.dim));
         await this.afterBatch(++this.calls);
         return out;
@@ -84,17 +90,27 @@ interface Harness {
     checkpoints: MemoryCheckpoints;
     consents: number;
     replaces: string[][];
+    /** The device each embedder start asked for. */
+    devices: string[];
 }
 
-async function load(root: string, options: { dim?: number; replace?: boolean } = {}): Promise<Harness> {
+async function load(
+    root: string,
+    options: { dim?: number; replace?: boolean; gpu?: boolean } = {},
+): Promise<Harness> {
     notices.length = 0;
     const app = new App(root);
     const plugin = new GnosisPlugin(app as never, { id: "gnosis", version: "0.0.0-test" } as never);
     await plugin.onload();
     const embedder = new HashEmbedder(options.dim ?? 384);
     const checkpoints = new MemoryCheckpoints();
-    const harness: Harness = { plugin, app, embedder, checkpoints, consents: 0, replaces: [] };
-    plugin.embedderFactory = async () => embedder;
+    const harness: Harness = { plugin, app, embedder, checkpoints, consents: 0, replaces: [], devices: [] };
+    plugin.hasWebgpu = async () => options.gpu ?? false;
+    plugin.modelStore = new MemoryModelStore();
+    plugin.embedderFactory = async (_model, _pooling, _progress, device) => {
+        harness.devices.push(device);
+        return embedder;
+    };
     plugin.checkpoints = checkpoints;
     plugin.askConsent = async () => {
         harness.consents++;
@@ -160,7 +176,7 @@ test("the diagnostics report records the build, and holds no note contents or pa
     assert.match(report, /indexed after \d+\.\d s/, "the last build and its duration");
     assert.match(report, /- 2 notes, \d+ chunks: \d+ embedded, 0 notes unchanged/);
     assert.match(report, /\| strategy \| "balanced" \|/, "settings are listed");
-    assert.match(report, /model · loaded bge-small-en-v1\.5\/cls in \d+ ms/, "the model load is timed");
+    assert.match(report, /model · loaded bge-small-en-v1\.5\/cls\/wasm in \d+ ms/, "the model load is timed, and where");
 
     assert.match(report, /document 'note-1' not found/, "a path in an error is a token");
     assert.ok(!report.includes("sourdough.md") && !report.includes("hydration.md"), report);
@@ -820,4 +836,49 @@ test("only a note a build includes starts the quiet period", async () => {
     assert.equal(clock.pending, 0);
     app.vault.emit("rename", { path: "notes/renamed.md" }, "notes/sourdough.md");
     assert.equal(clock.pending, 1);
+});
+
+// ---- Where the model runs ---------------------------------------------------------
+
+test("a build on the graphics card embeds in batches of 64, one on the CPU in 16", async () => {
+    const gpuRoot = vaultCopy({ artifact: false, extraNotes: 40 });
+    const gpu = await load(gpuRoot, { gpu: true });
+    await gpu.plugin.buildIndex();
+    assert.deepEqual(gpu.devices, ["webgpu"], "a build by hand may name the GPU engine, and uses it");
+    assert.ok(Math.max(...gpu.embedder.batches) > 16, JSON.stringify(gpu.embedder.batches));
+    assert.ok(Math.max(...gpu.embedder.batches) <= 64);
+
+    const cpuRoot = vaultCopy({ artifact: false, extraNotes: 40 });
+    const cpu = await load(cpuRoot, { gpu: false });
+    await cpu.plugin.buildIndex();
+    assert.deepEqual(cpu.devices, ["wasm"]);
+    assert.ok(Math.max(...cpu.embedder.batches) <= 16, JSON.stringify(cpu.embedder.batches));
+});
+
+test("an automatic update keeps to the CPU until the WebGPU engine is here", async () => {
+    const root = vaultCopy({ artifact: false });
+    const harness = await load(root, { gpu: true });
+    harness.plugin.settings.compute = "cpu";
+    await harness.plugin.buildIndex(); // a CPU index, as before this change
+    harness.plugin.settings.compute = "auto";
+
+    writeFileSync(join(root, "notes/hydration.md"), "# Hydration\n\nRewritten.\n");
+    touch(root, "notes/hydration.md");
+    harness.devices.length = 0;
+    harness.embedder.seen.length = 0;
+    const consents = harness.consents;
+    await harness.plugin.autoUpdate();
+    assert.ok(harness.embedder.seen.some((t) => t.includes("Rewritten")), "the update ran");
+    assert.ok(!harness.devices.includes("webgpu"), "the GPU engine is never downloaded unasked");
+    assert.equal(harness.plugin.runningOn(), "wasm");
+    assert.equal(harness.consents, consents);
+
+    (harness.plugin.modelStore as MemoryModelStore).runtimes.set(RUNTIMES.webgpu.url, RUNTIMES.webgpu.bytes);
+    writeFileSync(join(root, "notes/hydration.md"), "# Hydration\n\nRewritten again.\n");
+    // Later than `touch`'s day ahead, or the first edit's time would hide this one.
+    const later = new Date(Date.now() + 2 * 86_400_000);
+    utimesSync(join(root, "notes/hydration.md"), later, later);
+    harness.devices.length = 0;
+    await harness.plugin.autoUpdate();
+    assert.deepEqual(harness.devices, ["webgpu"], "once it is here, an update uses it");
 });

@@ -41,10 +41,13 @@ import {
     type ModelLoadRecord,
 } from "./diagnostics.js";
 import {
-    RUNTIME,
+    BATCH_CHUNKS,
+    RUNTIMES,
     queryVectors,
     startWorkerEmbedder,
     unsupportedReason,
+    webgpuAdapter,
+    type Device,
     type DownloadProgress,
     type EmbedderFactory,
     type TextEmbedder,
@@ -63,8 +66,9 @@ import type { Hit, IndexInfo, SpaceInfo } from "./types.js";
 
 /** An embedder for one model, from the moment it starts loading. */
 interface EmbedderState {
-    /** Model id and pooling: a different index may need a different model. */
+    /** Model id, pooling and device: a different index may need a different model. */
     key: string;
+    device: Device;
     starting: Promise<TextEmbedder>;
     /** Set once loaded, so a search can tell "ready" without awaiting. */
     ready: TextEmbedder | null;
@@ -77,6 +81,10 @@ export default class GnosisPlugin extends Plugin {
 
     /** How an embedder is started; tests replace the worker with a stand-in. */
     embedderFactory: EmbedderFactory = startWorkerEmbedder;
+    /** Whether this device has a WebGPU adapter; tests answer for it. */
+    hasWebgpu: () => Promise<boolean> = webgpuAdapter;
+    /** The adapter check, once per session: it does not change while Obsidian runs. */
+    private webgpu: Promise<boolean> | null = null;
     /** How the reader is asked; tests answer for them. */
     askConsent: (downloads: Download[]) => Promise<boolean> = (downloads) =>
         askConsent(this.app, downloads);
@@ -377,8 +385,11 @@ export default class GnosisPlugin extends Plugin {
         }
 
         // Started here as well as when the setting is turned on: after a
-        // restart the model is cached but not loaded.
-        this.startEmbedder(space).catch(() => {});
+        // restart the model is cached but not loaded. Unattended: opening the
+        // search box never downloads the GPU runtime.
+        void this.chooseDevice(true)
+            .then((device) => this.startEmbedder(space, device))
+            .catch(() => {});
         new SemanticSearchModal(
             this.app,
             this.display(),
@@ -435,12 +446,13 @@ export default class GnosisPlugin extends Plugin {
             return false;
         }
         const model = queryModelFor(space.queryModel);
-        if (model === null || !(await this.askConsent(downloadsFor(space.queryModel, model, RUNTIME)))) {
+        const device = await this.chooseDevice(false);
+        if (model === null || !(await this.askConsent(downloadsFor(space.queryModel, model, RUNTIMES[device], device)))) {
             return false;
         }
         this.settings.semanticSearch = true;
         await this.saveSettings();
-        this.startEmbedder(space).catch(() => {});
+        this.startEmbedder(space, device).catch(() => {});
         return true;
     }
 
@@ -450,13 +462,44 @@ export default class GnosisPlugin extends Plugin {
         this.stopEmbedder();
     }
 
+    /** Whether this device can use the GPU, as far as WebGPU says. */
+    gpuAvailable(): Promise<boolean> {
+        this.webgpu ??= this.hasWebgpu().catch(() => false);
+        return this.webgpu;
+    }
+
     /**
-     * Start (or reuse) the embedder for `space`'s model, reporting the
-     * download unless `quiet`: an automatic update loads it unseen, as it was
-     * already downloaded with the reader's consent.
+     * Where the model should run: the GPU when the Compute setting allows it
+     * and WebGPU has an adapter, else the CPU.
+     *
+     * `unattended` is for starts nobody is asked about — a search, an
+     * automatic update. They use the GPU only if its runtime is already on
+     * this device, since it is a 25.6 MB download the reader has not agreed
+     * to; the next start that asks (turning semantic search on, or a build by
+     * hand) names it in the prompt.
      */
-    private startEmbedder(space: SpaceInfo, quiet = false): Promise<TextEmbedder> {
-        const key = embedderKey(space);
+    async chooseDevice(unattended: boolean): Promise<Device> {
+        if (this.settings.compute === "cpu" || !(await this.gpuAvailable())) {
+            return "wasm";
+        }
+        if (unattended && !(await this.modelStore.hasRuntime(RUNTIMES.webgpu.url).catch(() => false))) {
+            return "wasm";
+        }
+        return "webgpu";
+    }
+
+    /** The device the loaded (or loading) embedder runs on, if there is one. */
+    runningOn(): Device | null {
+        return this.embedder?.device ?? null;
+    }
+
+    /**
+     * Start (or reuse) the embedder for `space`'s model on `device`,
+     * reporting the download unless `quiet`: an automatic update loads it
+     * unseen, as it was already downloaded with the reader's consent.
+     */
+    private startEmbedder(space: SpaceInfo, device: Device, quiet = false): Promise<TextEmbedder> {
+        const key = embedderKey(space, device);
         if (this.embedder?.key === key) {
             return this.embedder.starting;
         }
@@ -467,12 +510,17 @@ export default class GnosisPlugin extends Plugin {
             return Promise.reject(new Error(`no download is known for '${space.queryModel}'`));
         }
         const progress = new DownloadNotice();
-        const starting = this.embedderFactory(model, space.pooling as "cls" | "mean", (p) => {
-            if (!quiet) {
-                progress.update(p);
-            }
-        });
-        const state: EmbedderState = { key, starting, ready: null };
+        const starting = this.embedderFactory(
+            model,
+            space.pooling as "cls" | "mean",
+            (p) => {
+                if (!quiet) {
+                    progress.update(p);
+                }
+            },
+            device,
+        );
+        const state: EmbedderState = { key, device, starting, ready: null };
         this.embedder = state;
         this.embedderError = null;
         this.statusChanged();
@@ -549,14 +597,15 @@ export default class GnosisPlugin extends Plugin {
     async modelStatus(): Promise<ModelStatus> {
         const { id, dim } = await this.currentModel();
         const model = queryModelFor(id);
-        const held = model === null ? null : await this.modelStore.held(model, RUNTIME.url).catch(() => null);
+        const held = model === null ? null : await this.modelStore.held(model, RUNTIME_URLS).catch(() => null);
         return modelStatus({
             modelId: id,
             dim,
             supported: model !== null,
             heldBytes: held === null ? null : held.modelBytes + held.runtimeBytes,
             complete: held?.modelComplete ?? false,
-            downloadBytes: (model?.downloadBytes ?? 0) + RUNTIME.bytes,
+            // What a first use here would download: the runtime for this device.
+            downloadBytes: (model?.downloadBytes ?? 0) + RUNTIMES[await this.chooseDevice(false)].bytes,
             embedder: this.embedder === null ? null : this.embedder.ready === null ? "loading" : "ready",
             error: this.embedderError,
             building: this.building !== null,
@@ -595,7 +644,7 @@ export default class GnosisPlugin extends Plugin {
             this.settings.semanticSearch = false;
             await this.saveSettings();
         }
-        const freed = await this.modelStore.remove(model, RUNTIME.url);
+        const freed = await this.modelStore.remove(model, RUNTIME_URLS);
         new Notice(`Gnosis: deleted the model — ${megabytes(freed)} freed`);
         this.statusChanged();
     }
@@ -848,11 +897,14 @@ export default class GnosisPlugin extends Plugin {
             // to start unasked.
             return { outcome: "not started", skipped: SKIP_NO_MODEL };
         }
-        const consented = this.settings.semanticSearch && (auto || this.embedder?.key === embedderKey(space));
-        if (!consented && !(await this.askConsent(downloadsFor(spec.model, model, RUNTIME)))) {
+        // An automatic update never downloads the GPU runtime; one by hand
+        // names it in the prompt below when this device would use it.
+        const device = await this.chooseDevice(auto);
+        const consented = this.settings.semanticSearch && (auto || this.embedder?.key === embedderKey(space, device));
+        if (!consented && !(await this.askConsent(downloadsFor(spec.model, model, RUNTIMES[device], device)))) {
             return { outcome: "not started" };
         }
-        const embedder = await this.startEmbedder(space, auto);
+        const embedder = await this.startEmbedder(space, device, auto);
         await startWasm();
 
         const vault = this.vaultKey();
@@ -883,6 +935,7 @@ export default class GnosisPlugin extends Plugin {
             now: () => Date.now(),
             yieldToUi: () => new Promise((resolve) => setTimeout(resolve, 0)),
             checkpointEveryMs: this.checkpointEveryMs,
+            batchChunks: BATCH_CHUNKS[device],
         });
 
         if (result.canceled || result.artifact === null) {
@@ -1173,8 +1226,11 @@ function platformName(): string {
     return `${Platform.isMobile ? "mobile" : "desktop"}, ${os}`;
 }
 
-function embedderKey(space: SpaceInfo): string {
-    return `${space.queryModel}/${space.pooling}`;
+/** Every ONNX Runtime build Gnosis may keep, for the model card and Delete. */
+const RUNTIME_URLS = [RUNTIMES.wasm.url, RUNTIMES.webgpu.url];
+
+function embedderKey(space: SpaceInfo, device: Device): string {
+    return `${space.queryModel}/${space.pooling}/${device}`;
 }
 
 /** The space a build will produce, in the shape the embedder is started from. */

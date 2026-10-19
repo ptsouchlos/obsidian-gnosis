@@ -26,9 +26,12 @@ export interface Held {
 }
 
 export interface ModelStore {
-    held(model: QueryModel, runtimeUrl: string): Promise<Held>;
-    /** Remove this model's files and the runtime. Returns the bytes freed. */
-    remove(model: QueryModel, runtimeUrl: string): Promise<number>;
+    /** `runtimeUrls`: every ONNX Runtime build Gnosis may have kept, CPU and GPU. */
+    held(model: QueryModel, runtimeUrls: readonly string[]): Promise<Held>;
+    /** Remove this model's files and the runtimes. Returns the bytes freed. */
+    remove(model: QueryModel, runtimeUrls: readonly string[]): Promise<number>;
+    /** Whether one runtime is kept, so an unattended start can use it without downloading. */
+    hasRuntime(runtimeUrl: string): Promise<boolean>;
 }
 
 /** Every URL transformers.js fetches for a repository starts with this. */
@@ -50,7 +53,11 @@ async function size(response: Response): Promise<number> {
 }
 
 export class BrowserModelStore implements ModelStore {
-    async held(model: QueryModel, runtimeUrl: string): Promise<Held> {
+    async hasRuntime(runtimeUrl: string): Promise<boolean> {
+        return (await caches.has(RUNTIME_CACHE)) && (await (await caches.open(RUNTIME_CACHE)).match(runtimeUrl)) !== undefined;
+    }
+
+    async held(model: QueryModel, runtimeUrls: readonly string[]): Promise<Held> {
         const held: Held = { modelBytes: 0, modelComplete: false, runtimeBytes: 0 };
         // `has` first: `open` would create an empty cache just to look in it.
         if (await caches.has(MODEL_CACHE)) {
@@ -69,16 +76,19 @@ export class BrowserModelStore implements ModelStore {
             }
         }
         if (await caches.has(RUNTIME_CACHE)) {
-            const runtime = await (await caches.open(RUNTIME_CACHE)).match(runtimeUrl);
-            if (runtime !== undefined) {
-                held.runtimeBytes = await size(runtime);
+            const cache = await caches.open(RUNTIME_CACHE);
+            for (const url of runtimeUrls) {
+                const runtime = await cache.match(url);
+                if (runtime !== undefined) {
+                    held.runtimeBytes += await size(runtime);
+                }
             }
         }
         return held;
     }
 
-    async remove(model: QueryModel, runtimeUrl: string): Promise<number> {
-        const { modelBytes, runtimeBytes } = await this.held(model, runtimeUrl);
+    async remove(model: QueryModel, runtimeUrls: readonly string[]): Promise<number> {
+        const { modelBytes, runtimeBytes } = await this.held(model, runtimeUrls);
         if (await caches.has(MODEL_CACHE)) {
             const cache = await caches.open(MODEL_CACHE);
             const prefix = repoPrefix(model);
@@ -89,24 +99,37 @@ export class BrowserModelStore implements ModelStore {
             }
         }
         if (await caches.has(RUNTIME_CACHE)) {
-            await (await caches.open(RUNTIME_CACHE)).delete(runtimeUrl);
+            const cache = await caches.open(RUNTIME_CACHE);
+            for (const url of runtimeUrls) {
+                await cache.delete(url);
+            }
         }
         return modelBytes + runtimeBytes;
     }
 }
 
-/** For tests: a model either held at its stated size, or not. */
+/** For tests: a model either held at its stated size, or not; runtimes by URL. */
 export class MemoryModelStore implements ModelStore {
     readonly held_ = new Set<string>();
+    /** Runtime URLs held, with their sizes. */
+    readonly runtimes = new Map<string, number>();
 
-    async held(model: QueryModel): Promise<Held> {
-        const has = this.held_.has(model.repo);
-        return { modelBytes: has ? model.downloadBytes : 0, modelComplete: has, runtimeBytes: has ? 14_300_000 : 0 };
+    async hasRuntime(runtimeUrl: string): Promise<boolean> {
+        return this.runtimes.has(runtimeUrl);
     }
 
-    async remove(model: QueryModel): Promise<number> {
-        const freed = this.held_.has(model.repo) ? model.downloadBytes + 14_300_000 : 0;
+    async held(model: QueryModel, runtimeUrls: readonly string[]): Promise<Held> {
+        const has = this.held_.has(model.repo);
+        const runtimeBytes = runtimeUrls.reduce((n, url) => n + (this.runtimes.get(url) ?? 0), 0);
+        return { modelBytes: has ? model.downloadBytes : 0, modelComplete: has, runtimeBytes };
+    }
+
+    async remove(model: QueryModel, runtimeUrls: readonly string[]): Promise<number> {
+        const { modelBytes, runtimeBytes } = await this.held(model, runtimeUrls);
         this.held_.delete(model.repo);
-        return freed;
+        for (const url of runtimeUrls) {
+            this.runtimes.delete(url);
+        }
+        return modelBytes + runtimeBytes;
     }
 }

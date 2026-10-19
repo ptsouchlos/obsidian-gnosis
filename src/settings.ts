@@ -59,6 +59,8 @@ export interface GnosisSettings {
     redactReport: boolean;
     /** Update an index this device built once edits settle; see `auto-update.ts`. */
     autoUpdate: boolean;
+    /** Auto: the graphics card through WebGPU where there is one, else the CPU. */
+    compute: "auto" | "cpu";
 }
 
 /**
@@ -88,6 +90,7 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     relatedPanelShown: false,
     redactReport: true,
     autoUpdate: true,
+    compute: "auto",
 };
 
 /** Where the footer's links go. */
@@ -421,12 +424,22 @@ export class GnosisSettingTab extends PluginSettingTab {
                 }),
             );
 
-        this.card(new Setting(containerEl))
-            .setName("Runs on")
-            .setDesc(
-                "The CPU, through WebAssembly, on this device. Graphics-card acceleration " +
-                    "(WebGPU) is not supported yet.",
-            );
+        const compute = this.card(new Setting(containerEl)).setName("Compute");
+        segmented<"auto" | "cpu">(
+            compute.controlEl,
+            "Compute",
+            [
+                { value: "auto", label: "Auto" },
+                { value: "cpu", label: "CPU" },
+            ],
+            this.plugin.settings.compute,
+            async (value) => {
+                this.plugin.settings.compute = value;
+                await this.plugin.saveSettings();
+                void this.describeCompute(compute);
+            },
+        );
+        void this.describeCompute(compute);
 
         this.heading(containerEl, "Diagnostics");
 
@@ -482,6 +495,24 @@ export class GnosisSettingTab extends PluginSettingTab {
         this.unsubscribe = null;
         this.ticket++;
         this.modelTicket++;
+    }
+
+    /** What Compute means on this device, and what the model runs on now. */
+    private async describeCompute(setting: Setting): Promise<void> {
+        const gpu = await this.plugin.gpuAvailable();
+        const running = this.plugin.runningOn();
+        const now =
+            running === "webgpu"
+                ? "Running on the graphics card (WebGPU)."
+                : running === "wasm"
+                  ? "Running on the CPU (WebAssembly)."
+                  : "";
+        const here = gpu
+            ? "Auto runs the model on your graphics card through WebGPU, about 100 times faster " +
+              "than the CPU when building an index. It downloads a second, 26 MB engine, after asking."
+            : "This device offers no graphics card to WebGPU, so the model runs on the CPU. On " +
+              "Linux, Obsidian enables WebGPU only when started with --enable-unsafe-webgpu.";
+        setting.setDesc(`${here} ${now}`.trim());
     }
 
     private async saveRanking(): Promise<void> {

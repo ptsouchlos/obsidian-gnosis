@@ -18,7 +18,12 @@ export interface LoadRequest {
     dtype: "fp32";
     pooling: "cls" | "mean";
     runtime: RuntimeSpec;
+    /** Where the model runs. "webgpu" only in the GPU worker, with its runtime. */
+    device: Device;
 }
+
+/** transformers.js's names: the CPU through WebAssembly, or the GPU. */
+export type Device = "wasm" | "webgpu";
 
 export interface EmbedRequest {
     id: number;

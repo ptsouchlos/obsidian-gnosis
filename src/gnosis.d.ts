@@ -11,3 +11,9 @@ declare module "worker:*" {
     const source: string;
     export default source;
 }
+
+// The same, bundled against ONNX Runtime's WebGPU build rather than its CPU one.
+declare module "worker-gpu:*" {
+    const source: string;
+    export default source;
+}

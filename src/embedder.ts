@@ -8,9 +8,12 @@
 //! is read from the manifest and never inferred here.
 
 import workerSource from "worker:./worker/embed-worker.ts";
+import gpuWorkerSource from "worker-gpu:./worker/embed-worker.ts";
 import { queryModelFor, type QueryModel } from "./models.js";
-import type { EmbedRequest, LoadRequest, Response } from "./worker/protocol.js";
+import type { Device, EmbedRequest, LoadRequest, Response } from "./worker/protocol.js";
 import type { SpaceInfo } from "./types.js";
+
+export type { Device } from "./worker/protocol.js";
 
 /** Bytes downloaded so far, for a progress report. */
 export interface DownloadProgress {
@@ -25,16 +28,47 @@ export interface TextEmbedder {
     dispose(): void;
 }
 
-/** Starts an embedder for a model; swapped out in tests. */
+/** Starts an embedder for a model on a device; swapped out in tests. */
 export type EmbedderFactory = (
     model: QueryModel,
     pooling: "cls" | "mean",
     onProgress: (progress: DownloadProgress) => void,
+    device: Device,
 ) => Promise<TextEmbedder>;
 
-/** ONNX Runtime's `.wasm`: URL, pinned hash and size, fixed at build time. */
-declare const GNOSIS_ORT_RUNTIME: { url: string; sha256: string; bytes: number };
-export const RUNTIME = GNOSIS_ORT_RUNTIME;
+/** An ONNX Runtime `.wasm`: URL, pinned hash and size, fixed at build time. */
+export interface Runtime {
+    url: string;
+    sha256: string;
+    bytes: number;
+}
+
+declare const GNOSIS_ORT_RUNTIME: Runtime;
+declare const GNOSIS_ORT_GPU_RUNTIME: Runtime;
+/** The CPU build, 13.6 MB, and the WebGPU build, 25.6 MB, each for its own worker. */
+export const RUNTIMES: Readonly<Record<Device, Runtime>> = {
+    wasm: GNOSIS_ORT_RUNTIME,
+    webgpu: GNOSIS_ORT_GPU_RUNTIME,
+};
+
+/**
+ * Chunks per model call while building. The GPU was measured fastest at 64
+ * (332 chunks/s, against 273 at 16); the CPU keeps the CLI's 16.
+ */
+export const BATCH_CHUNKS: Readonly<Record<Device, number>> = { wasm: 16, webgpu: 64 };
+
+/**
+ * Whether this device has a WebGPU adapter. False on Linux unless Obsidian
+ * was started with WebGPU flags: Chromium leaves it off there.
+ */
+export async function webgpuAdapter(): Promise<boolean> {
+    try {
+        const gpu = (navigator as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+        return gpu !== undefined && (await gpu.requestAdapter()) !== null;
+    } catch {
+        return false;
+    }
+}
 
 /** Why semantic search cannot run on this index, or null if it can. */
 export function unsupportedReason(space: SpaceInfo): string | null {
@@ -69,9 +103,10 @@ export async function queryVectors(
     return new Map([[space.space, vector]]);
 }
 
-/** The embedder that ships: transformers.js in a worker. */
-export const startWorkerEmbedder: EmbedderFactory = async (model, pooling, onProgress) => {
-    const embedder = new WorkerEmbedder(onProgress);
+/** The embedder that ships: transformers.js in a worker, built for `device`. */
+export const startWorkerEmbedder: EmbedderFactory = async (model, pooling, onProgress, device) => {
+    const embedder = new WorkerEmbedder(device === "webgpu" ? gpuWorkerSource : workerSource, onProgress);
+    const runtime = RUNTIMES[device];
     try {
         await embedder.request({
             type: "load",
@@ -79,7 +114,8 @@ export const startWorkerEmbedder: EmbedderFactory = async (model, pooling, onPro
             revision: model.revision,
             dtype: model.dtype,
             pooling,
-            runtime: { url: RUNTIME.url, sha256: RUNTIME.sha256 },
+            runtime: { url: runtime.url, sha256: runtime.sha256 },
+            device,
         });
     } catch (error) {
         embedder.dispose();
@@ -102,10 +138,13 @@ class WorkerEmbedder implements TextEmbedder {
     private readonly pending = new Map<number, Pending>();
     private next = 1;
 
-    constructor(private readonly onProgress: (progress: DownloadProgress) => void) {
+    constructor(
+        source: string,
+        private readonly onProgress: (progress: DownloadProgress) => void,
+    ) {
         // From a blob, because a plugin ships as one `main.js` and has no URL
         // of its own to point a worker at.
-        this.url = URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" }));
+        this.url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
         this.worker = new Worker(this.url);
         this.worker.onmessage = (event: MessageEvent<Response>) => this.receive(event.data);
         this.worker.onerror = (event) => {

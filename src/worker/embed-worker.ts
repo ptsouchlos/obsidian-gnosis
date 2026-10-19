@@ -5,6 +5,10 @@
 //! stutters. And it is the one context in Obsidian where transformers.js can
 //! be made to take its web path at all — see `web-env.ts`.
 //!
+//! Bundled twice, against ONNX Runtime's CPU build and its WebGPU build (see
+//! `script/esbuild-worker.mjs`); the plugin starts the one for the device it
+//! chose, and tells it which runtime binary to load.
+//!
 //! What this downloads, and nothing else, is what the consent prompt states:
 //! the model's files from Hugging Face at a pinned revision, and ONNX
 //! Runtime's WebAssembly binary from jsDelivr, verified against a hash fixed at
@@ -113,8 +117,8 @@ async function load(request: LoadRequest): Promise<void> {
         throw new Error("transformers.js did not set up its WebAssembly backend");
     }
     onnx.wasm.wasmBinary = await runtimeBinary(request.runtime, post, request.id);
-    // transformers.js points this at jsDelivr's WebGPU build by default, and
-    // would download that too — 26 MB that the binary above makes unused.
+    // transformers.js points this at jsDelivr by default, and would download
+    // the binary a second time, unverified.
     onnx.wasm.wasmPaths = undefined;
     // Threads need a cross-origin-isolated page, which Obsidian is not; one
     // thread is what ONNX Runtime would fall back to, said explicitly.
@@ -126,7 +130,7 @@ async function load(request: LoadRequest): Promise<void> {
     const extractor = await pipeline("feature-extraction", request.repo, {
         revision: request.revision,
         dtype: request.dtype,
-        device: "wasm",
+        device: request.device,
         progress_callback: (info) => {
             if (info.status === "progress") {
                 post({ id: request.id, type: "progress", file: info.file, loaded: info.loaded, total: info.total });
