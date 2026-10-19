@@ -71,6 +71,34 @@ export function workerPlugin({ minify }) {
     };
 }
 
+/**
+ * ONNX Runtime's Emscripten loader for the CPU build, as text.
+ *
+ * Threads are workers the loader starts from its own URL, which a worker
+ * bundled into `main.js` does not have. So the CPU worker resolves ONNX
+ * Runtime to its build that loads the loader separately, carries the loader's
+ * text, and starts it from a blob. Bundled, not fetched: no ONNX Runtime
+ * JavaScript comes from the network either way.
+ */
+function loaderPlugin({ gpu }) {
+    return {
+        name: "gnosis-ort-loader",
+        setup(build) {
+            build.onResolve({ filter: /^gnosis:ort-loader$/ }, () => ({ path: "ort-loader", namespace: "gnosis-ort-loader" }));
+            build.onLoad({ filter: /.*/, namespace: "gnosis-ort-loader" }, () => {
+                // The GPU worker runs one thread and its build bundles its own
+                // loader; it carries none.
+                if (gpu) {
+                    return { contents: "", loader: "text" };
+                }
+                const fromTransformers = createRequire(require.resolve("@huggingface/transformers"));
+                const dist = dirname(fromTransformers.resolve("onnxruntime-web/wasm"));
+                return { contents: readFileSync(join(dist, "ort-wasm-simd-threaded.mjs"), "utf8"), loader: "text" };
+            });
+        },
+    };
+}
+
 async function bundleWorker(path, { minify, gpu }) {
     const result = await esbuild.build({
         entryPoints: [path],
@@ -82,11 +110,14 @@ async function bundleWorker(path, { minify, gpu }) {
         target: "es2022",
         minify,
         logLevel: "warning",
+        plugins: [loaderPlugin({ gpu })],
+        // The CPU worker takes ONNX Runtime's build that loads its loader
+        // separately, so threads can start from it (see `loaderPlugin`).
+        conditions: gpu ? [] : ["onnxruntime-web-use-extern-wasm"],
         // transformers.js imports ONNX Runtime's WebGPU build, which only runs
         // the 25.6 MB asyncify binary. The CPU worker swaps in the plain wasm
-        // build, which runs the 13.6 MB one. Either way the build bundles its
-        // own loader, so no ONNX Runtime JavaScript is ever fetched — only the
-        // binary, which the worker verifies by hash.
+        // build, which runs the 13.6 MB one. No ONNX Runtime JavaScript is
+        // ever fetched — only the binary, which the worker verifies by hash.
         alias: gpu ? {} : { "onnxruntime-web/webgpu": "onnxruntime-web/wasm" },
         define: {
             // ONNX Runtime locates its files from `import.meta.url`, which an

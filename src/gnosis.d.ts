@@ -12,6 +12,13 @@ declare module "worker:*" {
     export default source;
 }
 
+// ONNX Runtime's Emscripten loader, as text, for the CPU worker's threads (see
+// `loaderPlugin` in `script/esbuild-worker.mjs`). Empty in the GPU worker.
+declare module "gnosis:ort-loader" {
+    const source: string;
+    export default source;
+}
+
 // The same, bundled against ONNX Runtime's WebGPU build rather than its CPU one.
 declare module "worker-gpu:*" {
     const source: string;
