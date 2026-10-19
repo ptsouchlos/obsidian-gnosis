@@ -36,6 +36,51 @@ export function noteName(hit: Hit): string {
     return file.replace(/\.md$/, "");
 }
 
+const percent = (x: number) => `${Math.round(Math.min(Math.max(x, 0), 1) * 100)}%`;
+const two = (x: number) => x.toFixed(2);
+
+/**
+ * What a hit's score is made of, in one line.
+ *
+ * With meaning in the blend: "Match 83% · meaning 0.65 · keywords 0.08 ·
+ * title +0.10", the parts adding up to the match. Keywords alone are a
+ * different scale: the blend still weighs them by their share (0.1 at
+ * Balanced), so a perfect keyword match would read "Match 3%". There,
+ * `keywordShare` undoes the weight and the line says how well the keywords
+ * matched against their own ceiling.
+ */
+export function scoreLine(hit: Hit, keywordShare: number | null): string {
+    const { meaning, keywords, title } = hit.parts;
+    const bonus = `title +${two(title)}`;
+    if (keywordShare !== null && keywordShare > 0) {
+        return `Keywords ${percent(keywords / keywordShare)} · ${bonus}`;
+    }
+    return `Match ${percent(hit.score)} · meaning ${two(meaning)} · keywords ${two(keywords)} · ${bonus}`;
+}
+
+/**
+ * The note's date and tags, for the line under a snippet: "created
+ * 2026-03-16 · #time/meeting". Empty when there is neither.
+ *
+ * `created` is the frontmatter property if the note has one, else its
+ * modified time: a date the reader recognizes either way, and named for what
+ * it is.
+ */
+export function metaLine(created: unknown, mtime: number | null, tags: readonly string[]): string {
+    const parts: string[] = [];
+    const date = typeof created === "string" && created.trim() !== "" ? created.trim().slice(0, 10) : null;
+    if (date !== null) {
+        parts.push(`created ${date}`);
+    } else if (mtime !== null) {
+        const d = new Date(mtime);
+        const pad = (n: number) => String(n).padStart(2, "0");
+        parts.push(`modified ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+    }
+    // A few, unique, in the note's own order: a line, not a tag cloud.
+    parts.push(...[...new Set(tags)].slice(0, 4));
+    return parts.join(" · ");
+}
+
 /** A one-line locator for a hit: its heading trail, or its folder. */
 export function hitSubtitle(hit: Hit): string {
     if (hit.heading_path !== "") {

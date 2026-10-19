@@ -16,7 +16,7 @@ import test from "node:test";
 import { App, notices, openedModals } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
 import { RelatedFollower } from "../src/related/follow.js";
-import { formatScore } from "../src/results.js";
+import { formatScore, metaLine, scoreLine } from "../src/results.js";
 import type { Hit } from "../src/types.js";
 
 /** The fixture vault's absolute path, injected by `test/build.mjs`. */
@@ -185,26 +185,12 @@ test("scores keep two significant figures, so keyword-only scores stay distinct"
     assert.equal(formatScore(0.7554), "0.76");
 });
 
-test("scores are shown only when asked for", async () => {
-    const { plugin } = await load();
-    run(plugin, "search");
-    await aModal();
-    const hit = (openedModals.at(-1)!.type("baker's percentages") as Hit[])[0]!;
-    const hidden = fakeEl();
-    openedModals.at(-1)!.renderSuggestion(hit, hidden as never);
-    assert.ok(!hidden.texts.includes(formatScore(hit.score)));
-
-    const shown = await load();
-    shown.plugin.settings.showScores = true;
-    run(shown.plugin, "search");
-    await aModal();
-    const el = fakeEl();
-    openedModals.at(-1)!.renderSuggestion(hit, el as never);
-    assert.equal(el.texts[0], formatScore(hit.score), "the score comes first, as a badge");
-});
-
-test("a result renders its title, locator and snippet", async () => {
-    const { plugin } = await load();
+test("a result renders its title, heading trail, snippet, date and tags, then its score line", async () => {
+    const { app, plugin } = await load();
+    app.fileCaches.set("notes/hydration.md", {
+        frontmatter: { created: "2026-03-16", tags: ["baking"] },
+        tags: [{ tag: "#bread" }],
+    });
     run(plugin, "search");
     await aModal();
 
@@ -213,8 +199,79 @@ test("a result renders its title, locator and snippet", async () => {
     const el = fakeEl();
     modal.renderSuggestion(hits[0]!, el as never);
     // The file's name, as Obsidian shows a note — not its H1, "Hydration".
-    assert.deepEqual(el.texts.slice(0, 2), ["hydration", "Hydration"]);
+    assert.deepEqual(el.texts.slice(0, 2), ["hydration", "› Hydration"]);
     assert.match(el.texts[2]!, /Baker's percentages/);
+    assert.equal(el.texts[3], "created 2026-03-16 · #bread · #baking");
+    assert.match(el.texts[4]!, /^Keywords \d+% · title \+\d\.\d\d$/, "keyword search: the keywords' own scale");
+});
+
+test("scores are shown by default, and can be turned off", async () => {
+    const { plugin } = await load();
+    assert.equal(plugin.settings.showScores, true);
+    plugin.settings.showScores = false;
+    run(plugin, "search");
+    await aModal();
+    const hit = (openedModals.at(-1)!.type("baker's percentages") as Hit[])[0]!;
+    const el = fakeEl();
+    openedModals.at(-1)!.renderSuggestion(hit, el as never);
+    assert.ok(!el.texts.some((t) => t.startsWith("Keywords") || t.startsWith("Match")), JSON.stringify(el.texts));
+});
+
+test("the score line says what a score is made of", () => {
+    const hit = { score: 0.8274, parts: { meaning: 0.6485, keywords: 0.0789, title: 0.1 } } as Hit;
+    assert.equal(scoreLine(hit, null), "Match 83% · meaning 0.65 · keywords 0.08 · title +0.10");
+    // Keyword search at Balanced: keywords carry 0.1 of the blend, so 0.032
+    // is a 32% keyword match, not a "3%" one.
+    const keywords = { score: 0.032, parts: { meaning: 0, keywords: 0.032, title: 0 } } as Hit;
+    assert.equal(scoreLine(keywords, 0.1), "Keywords 32% · title +0.00");
+    // The bonus can lift a score past 1; a percentage cannot pass 100.
+    assert.match(scoreLine({ score: 1.05, parts: { meaning: 0.9, keywords: 0.05, title: 0.1 } } as Hit, null), /^Match 100%/);
+});
+
+test("the metadata line prefers a created property, and keeps a few tags", () => {
+    assert.equal(metaLine("2026-03-16T09:30", 0, ["#a"]), "created 2026-03-16 · #a");
+    assert.match(metaLine(undefined, Date.UTC(2025, 0, 2, 12), []), /^modified 2025-01-0[12]$/);
+    assert.equal(metaLine(undefined, null, ["#a", "#a", "#b", "#c", "#d", "#e"]), "#a · #b · #c · #d");
+    assert.equal(metaLine(undefined, null, []), "");
+});
+
+test("Shift+Enter inserts a link to the selected result, and Mod+Shift+C copies one", async () => {
+    const { app, plugin } = await load();
+    const inserted: string[] = [];
+    app.workspace.activeEditor = { file: null, editor: { replaceSelection: (text) => inserted.push(text) } };
+    run(plugin, "search");
+    await aModal();
+    const modal = openedModals.at(-1)!;
+    const hit = (modal.type("baker's percentages") as Hit[])[0]!;
+
+    modal.keys.get("Shift+Enter")!({ shiftKey: true });
+    modal.choose(hit);
+    assert.deepEqual(inserted, ["[[hydration]]"]);
+    assert.deepEqual(app.workspace.opened, [], "a link, not the note");
+
+    const copied: string[] = [];
+    const clipboard = { writeText: async (text: string) => void copied.push(text) };
+    Object.defineProperty(globalThis.navigator, "clipboard", { value: clipboard, configurable: true });
+    modal.keys.get("Mod+Shift+c")!({});
+    modal.choose(hit);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(copied, ["[[hydration]]"]);
+    assert.ok(notices.some((n) => n.includes("copied a link to hydration")), JSON.stringify(notices));
+
+    // The next plain choice opens again: an action lasts one choice.
+    modal.choose(hit);
+    assert.deepEqual(app.workspace.opened, ["notes/hydration.md"]);
+});
+
+test("inserting a link with no note open says so", async () => {
+    const { plugin } = await load();
+    run(plugin, "search");
+    await aModal();
+    const modal = openedModals.at(-1)!;
+    const hit = (modal.type("baker's percentages") as Hit[])[0]!;
+    modal.keys.get("Shift+Enter")!({ shiftKey: true });
+    modal.choose(hit);
+    assert.ok(notices.some((n) => n.includes("open a note to insert a link")), JSON.stringify(notices));
 });
 
 test("choosing a result whose note is gone says so instead of doing nothing", async () => {

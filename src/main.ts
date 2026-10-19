@@ -332,9 +332,16 @@ export default class GnosisPlugin extends Plugin {
     }
 
     /** How pickers show and open results, as the settings say now. */
-    private display(): Display {
+    /**
+     * How pickers show and open results, as the settings say now. With
+     * `keywordsOnly`, scores are on the keyword scale, so the score line is
+     * told the keywords' share of the blend this index searches with.
+     */
+    private display(keywordsOnly = false): Display {
         const { modOpen, keyboardHints, showScores } = this.settings;
-        return { modOpen, keyboardHints, showScores };
+        const denseWeight = (this.index?.searchConfig() as { dense_weight?: number } | undefined)?.dense_weight;
+        const keywordShare = keywordsOnly && denseWeight !== undefined ? 1 - denseWeight : null;
+        return { modOpen, keyboardHints, showScores, keywordShare };
     }
 
     /** Drop the loaded index, so the next search re-reads the artifact. */
@@ -380,7 +387,7 @@ export default class GnosisPlugin extends Plugin {
 
         const space = this.settings.semanticSearch ? this.semanticSpace(index) : null;
         if (space === null) {
-            new LexicalSearchModal(this.app, this.display(), lexical, notify).open();
+            new LexicalSearchModal(this.app, this.display(true), lexical, notify).open();
             return;
         }
 
@@ -396,15 +403,17 @@ export default class GnosisPlugin extends Plugin {
             async (query) => {
                 const embedder = this.embedder?.ready ?? null;
                 if (embedder === null) {
-                    return lexical(query);
+                    // Keywords alone while the model loads, scored on their scale.
+                    return { hits: lexical(query), keywordShare: this.display(true).keywordShare };
                 }
                 try {
                     const vectors = await queryVectors(embedder, space, query);
-                    return index.search(query, vectors, this.settings.limit, undefined) as Hit[];
+                    const hits = index.search(query, vectors, this.settings.limit, undefined) as Hit[];
+                    return { hits, keywordShare: null };
                 } catch (error) {
                     this.diagnostics.record("error", `semantic search failed: ${describe(error)}`);
                     new Notice(`Gnosis: ${describe(error)}`);
-                    return [];
+                    return { hits: [], keywordShare: null };
                 }
             },
             this.embedder?.ready != null,
