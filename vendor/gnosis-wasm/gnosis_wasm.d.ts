@@ -148,6 +148,14 @@ export class Index {
     staleness(entries: any): any;
 }
 
+/**
+ * The content hash `addDocument` records for `text`, for `Index.staleness`.
+ *
+ * A client that sends a hash gets an exact answer, where an mtime moves
+ * whenever a syncer or another plugin rewrites a file unchanged.
+ */
+export function contentHash(text: string): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -161,6 +169,7 @@ export interface InitOutput {
     readonly builder_fromArtifact: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly builder_pendingCount: (a: number, b: number) => void;
     readonly builder_setVectors: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly contentHash: (a: number, b: number, c: number) => void;
     readonly index_info: (a: number, b: number) => void;
     readonly index_lexicalSearch: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly index_open: (a: number, b: number, c: number, d: number) => void;
@@ -174,6 +183,7 @@ export interface InitOutput {
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_export3: (a: number) => void;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
+    readonly __wbindgen_export4: (a: number, b: number, c: number) => void;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;

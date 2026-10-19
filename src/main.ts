@@ -16,7 +16,7 @@
 
 import { Notice, Platform, Plugin, apiVersion } from "obsidian";
 import type { TFile, WorkspaceLeaf } from "obsidian";
-import type { Index } from "../vendor/gnosis-wasm/gnosis_wasm.js";
+import { contentHash, type Index } from "../vendor/gnosis-wasm/gnosis_wasm.js";
 import {
     ArtifactMissing,
     MANIFEST_NAME,
@@ -56,6 +56,7 @@ import { RELATED_VIEW, RelatedView } from "./related/view.js";
 import { withPresets } from "./ranking.js";
 import { DEFAULT_SETTINGS, GnosisSettingTab, type GnosisSettings } from "./settings.js";
 import { BrowserModelStore, type ModelStore } from "./model-store.js";
+import { vaultStaleness, stalenessLine, type Staleness } from "./staleness.js";
 import { indexStatus, modelStatus, type IndexStatus, type ModelStatus } from "./status.js";
 import type { Hit, IndexInfo, SpaceInfo } from "./types.js";
 
@@ -598,7 +599,35 @@ export default class GnosisPlugin extends Plugin {
         for (const space of info.spaces) {
             lines.push(`${space.space}: ${space.queryModel} (${space.pooling}, ${space.dim}d)`);
         }
+        const stale = await this.vaultStaleness();
+        if (stale !== null) {
+            lines.push(stalenessLine(stale));
+        }
         return lines;
+    }
+
+    /**
+     * Which notes a build would add, update and remove, or null with no
+     * readable index. Opens the index if nothing has yet; the related panel
+     * usually has.
+     */
+    async vaultStaleness(): Promise<Staleness | null> {
+        const opened = await this.openIndex();
+        if ("error" in opened) {
+            return null;
+        }
+        try {
+            const stale = await vaultStaleness(opened.index, this.notes(), contentHash);
+            this.diagnostics.record(
+                "index",
+                `staleness in ${stale.elapsedMs} ms (${stale.hashed} hashed): ${stale.changed.length} changed, ` +
+                    `${stale.added.length} new, ${stale.removed.length} deleted`,
+            );
+            return stale;
+        } catch (error) {
+            this.diagnostics.record("error", `could not check staleness: ${describe(error)}`);
+            return null;
+        }
     }
 
     /**
@@ -951,13 +980,21 @@ export default class GnosisPlugin extends Plugin {
      * cards show. Redacted by default: every note path in it becomes a token.
      */
     async generateReport(): Promise<void> {
+        let index = await this.indexStatus();
+        if (index.state === "ready") {
+            // The counts only: the paths would need redacting for no gain.
+            const stale = await this.vaultStaleness();
+            if (stale !== null) {
+                index = { ...index, detail: stalenessLine(stale) };
+            }
+        }
         const report = renderReport({
             generatedAt: this.diagnostics.now(),
             pluginVersion: this.manifest.version,
             obsidianVersion: apiVersion,
             platform: platformName(),
             artifactDir: this.settings.artifactDir,
-            index: await this.indexStatus(),
+            index,
             model: await this.modelStatus(),
             settings: this.settings,
             diagnostics: this.diagnostics,

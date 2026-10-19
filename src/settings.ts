@@ -8,6 +8,7 @@ import { REPORT_PATH } from "./diagnostics.js";
 import type GnosisPlugin from "./main.js";
 import { DEFAULT_BUILD_MODEL, QUERY_MODELS } from "./models.js";
 import type { Strategy, TitleBonus } from "./ranking.js";
+import { stalenessLine } from "./staleness.js";
 import type { IndexStatus, ModelStatus } from "./status.js";
 import { segmented } from "./ui/segmented.js";
 
@@ -121,9 +122,18 @@ export class GnosisSettingTab extends PluginSettingTab {
         let modelCard: HTMLElement | null = null;
         const refresh = (progressOnly = false) => {
             const ticket = ++this.ticket;
-            void this.plugin.indexStatus().then((index) => {
-                if (ticket === this.ticket) {
-                    this.renderIndexCard(card, index);
+            void this.plugin.indexStatus().then(async (index) => {
+                if (ticket !== this.ticket) {
+                    return;
+                }
+                this.renderIndexCard(card, index);
+                // How far behind the vault it is, filled in once known so the
+                // card never waits on it. A progress tick has nothing new to say.
+                if (index.state === "ready" && !progressOnly) {
+                    const stale = await this.plugin.vaultStaleness();
+                    if (stale !== null && ticket === this.ticket) {
+                        this.renderIndexCard(card, { ...index, detail: stalenessLine(stale) });
+                    }
                 }
             });
             // A build's progress tick changes only the index card's numbers;
