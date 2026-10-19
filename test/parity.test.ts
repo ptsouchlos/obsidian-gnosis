@@ -249,3 +249,27 @@ test("the plugin builds the index the CLI built", options, async () => {
     ours.free();
     theirs.free();
 });
+
+/**
+ * Does the plugin's content hash match the one the CLI recorded?
+ *
+ * Staleness hashes a note to clear an mtime that moved without an edit. If
+ * the plugin's hash of a note's text differed from the CLI's hash of the
+ * file, every such note would read as changed against a CLI-built index.
+ * Asked by hash alone, for every note, so each one is compared. Needs no
+ * model and any quantization.
+ */
+test("the plugin hashes notes as the CLI recorded them", options, async () => {
+    const { contentHash } = await import("../vendor/gnosis-wasm/gnosis_wasm.js");
+    const app = new App(vault!);
+    // Opening starts the WebAssembly module `contentHash` lives in.
+    const index = await openArtifact(app as never, ".gnosis/artifact");
+    const notes = app.vault.getMarkdownFiles();
+    const entries = await Promise.all(
+        notes.map(async (file) => ({ path: file.path, hash: contentHash(await app.vault.cachedRead(file)) })),
+    );
+    const report = index.staleness(entries) as { changed: string[]; added: string[]; unchanged: number };
+    console.log(`hash parity: ${report.unchanged} of ${notes.length} notes match the CLI's hash`);
+    assert.deepEqual(report.changed, [], "every note's hash matches the CLI's");
+    assert.deepEqual(report.added, [], "and every note is in the CLI's index");
+});

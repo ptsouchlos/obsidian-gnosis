@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -19,6 +19,7 @@ import { replaceWarning, statusLine } from "../src/build/plan.js";
 import type { TextEmbedder } from "../src/embedder.js";
 import type { IndexInfo } from "../src/types.js";
 import { openArtifact } from "../src/artifact.js";
+import { stalenessLine } from "../src/staleness.js";
 
 declare const GNOSIS_TEST_VAULT: string;
 
@@ -507,4 +508,84 @@ test("a move whose copy does not open leaves the original and no half-copy", asy
     assert.equal(plugin.settings.artifactDir, ARTIFACT);
     assert.ok(readFileSync(shard).equals(corrupt), "the original is exactly as it was");
     assert.ok(!existsSync(join(root, "Gnosis Index")), "and the copy is gone");
+});
+
+// ---- Staleness ----------------------------------------------------------------
+
+/** Move a file's mtime a day forward, as a syncer or a careless plugin can. */
+function touch(root: string, path: string): void {
+    const later = new Date(Date.now() + 86_400_000);
+    utimesSync(join(root, path), later, later);
+}
+
+test("staleness counts edited, new and deleted notes, and not touched ones", async () => {
+    const root = vaultCopy({ artifact: false });
+    const { plugin, app } = await load(root);
+    await plugin.buildIndex();
+
+    const fresh = (await plugin.vaultStaleness())!;
+    assert.deepEqual([fresh.changed, fresh.added, fresh.removed], [[], [], []]);
+    assert.equal(fresh.hashed, 0, "nothing newer than the build is read at all");
+    assert.equal(stalenessLine(fresh), "Up to date with your notes.");
+
+    // Touched but not edited: its mtime says changed, its content does not.
+    touch(root, "notes/sourdough.md");
+    const touched = (await plugin.vaultStaleness())!;
+    assert.deepEqual(touched.changed, [], "a touched note is not a changed one");
+    assert.equal(touched.hashed, 1, "only the touched note was read");
+
+    writeFileSync(join(root, "notes/hydration.md"), "# Hydration\n\nRewritten: water by mass.\n");
+    touch(root, "notes/hydration.md");
+    writeFileSync(join(root, "notes/rye.md"), "# Rye\n\nA denser crumb.\n");
+    rmSync(join(root, "notes/sourdough.md"));
+    const stale = (await plugin.vaultStaleness())!;
+    assert.deepEqual(stale.changed, ["notes/hydration.md"]);
+    assert.deepEqual(stale.added, ["notes/rye.md"]);
+    assert.deepEqual(stale.removed, ["notes/sourdough.md"]);
+    assert.equal(stalenessLine(stale), "1 note changed, 1 new, 1 deleted since the last update.");
+
+    // What a build leaves out is not "new": an excluded note, and the report.
+    app.excluded.push("notes/rye.md");
+    await plugin.generateReport();
+    const excluded = (await plugin.vaultStaleness())!;
+    assert.deepEqual(excluded.added, [], JSON.stringify(excluded));
+    assert.match(
+        readFileSync(join(root, "gnosis-report.md"), "utf8"),
+        /- State: Ready — 1 note changed, 1 deleted since the last update\./,
+        "the report carries the counts, the excluded note not among them",
+    );
+
+    // And an update brings it back to zero.
+    app.excluded.length = 0;
+    await plugin.buildIndex();
+    const updated = (await plugin.vaultStaleness())!;
+    assert.deepEqual([updated.changed, updated.added, updated.removed], [[], [], []], JSON.stringify(updated));
+});
+
+// The fixture's artifact carries placeholder hashes, so it cannot say whether
+// the plugin's hash is the CLI's; `parity.test.ts` checks that against a real
+// export. What it can say is what counts as deleted.
+test("against a CLI index, only a missing note is deleted, never an image", async () => {
+    const root = vaultCopy({ artifact: true });
+    const { plugin } = await load(root, { dim: 4 });
+    const stale = (await plugin.vaultStaleness())!;
+    assert.deepEqual(
+        stale.removed,
+        ["work/planner.md"],
+        "the note the fixture deliberately lacks, and not notes/loaf.png",
+    );
+});
+
+test("the staleness line names only what there is", () => {
+    const s = (changed: number, added: number, removed: number) => ({
+        changed: Array(changed).fill("x"),
+        added: Array(added).fill("x"),
+        removed: Array(removed).fill("x"),
+        hashed: 0,
+        elapsedMs: 0,
+    });
+    assert.equal(stalenessLine(s(12, 0, 0)), "12 notes changed since the last update.");
+    assert.equal(stalenessLine(s(0, 3, 0)), "3 new notes since the last update.");
+    assert.equal(stalenessLine(s(0, 0, 1)), "1 note deleted since the last update.");
+    assert.equal(stalenessLine(s(0, 3, 2)), "3 new notes, 2 deleted since the last update.");
 });
