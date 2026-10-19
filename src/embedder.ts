@@ -58,6 +58,17 @@ export const RUNTIMES: Readonly<Record<Device, Runtime>> = {
 export const BATCH_CHUNKS: Readonly<Record<Device, number>> = { wasm: 16, webgpu: 64 };
 
 /**
+ * CPU threads for the model: half the logical cores. Measured in Obsidian on
+ * 24: 2.7 chunks/s on one, 18 on eight, 19 on twelve, 22 on sixteen and 14 on
+ * all 24, where they compete with Obsidian itself. Half leaves the other half
+ * for the app while a build runs.
+ */
+export function cpuThreads(): number {
+    const cores = typeof navigator === "undefined" ? 1 : navigator.hardwareConcurrency || 1;
+    return Math.max(1, Math.floor(cores / 2));
+}
+
+/**
  * Whether this device has a WebGPU adapter. False on Linux unless Obsidian
  * was started with WebGPU flags: Chromium leaves it off there.
  */
@@ -116,6 +127,8 @@ export const startWorkerEmbedder: EmbedderFactory = async (model, pooling, onPro
             pooling,
             runtime: { url: runtime.url, sha256: runtime.sha256 },
             device,
+            // The GPU worker's build bundles its loader and runs one thread.
+            threads: device === "wasm" ? cpuThreads() : 1,
         });
     } catch (error) {
         embedder.dispose();

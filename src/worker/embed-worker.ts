@@ -17,6 +17,7 @@
 //! and nothing here sends anything anywhere.
 
 import "./web-env.js";
+import loaderSource from "gnosis:ort-loader";
 import { RUNTIME_CACHE } from "../model-store.js";
 import { env, pipeline } from "@huggingface/transformers";
 import type { FeatureExtractionPipeline } from "@huggingface/transformers";
@@ -117,12 +118,22 @@ async function load(request: LoadRequest): Promise<void> {
         throw new Error("transformers.js did not set up its WebAssembly backend");
     }
     onnx.wasm.wasmBinary = await runtimeBinary(request.runtime, post, request.id);
-    // transformers.js points this at jsDelivr by default, and would download
-    // the binary a second time, unverified.
-    onnx.wasm.wasmPaths = undefined;
-    // Threads need a cross-origin-isolated page, which Obsidian is not; one
-    // thread is what ONNX Runtime would fall back to, said explicitly.
-    onnx.wasm.numThreads = 1;
+    if (request.threads > 1 && loaderSource !== "") {
+        // Threads are workers ONNX Runtime starts from its loader's URL, so
+        // the loader is given one: a blob of the text bundled here. Obsidian
+        // gives every worker Node's `process`, and Emscripten would take its
+        // Node path in each thread; the same line `web-env.ts` runs here hides
+        // it there. Obsidian enables SharedArrayBuffer, which threads need.
+        const hidden = "if (typeof globalThis.process !== 'undefined') globalThis.process = undefined;\n";
+        const loader = URL.createObjectURL(new Blob([hidden + loaderSource], { type: "text/javascript" }));
+        onnx.wasm.wasmPaths = { mjs: loader };
+        onnx.wasm.numThreads = request.threads;
+    } else {
+        // transformers.js points this at jsDelivr by default, and would
+        // download the binary a second time, unverified.
+        onnx.wasm.wasmPaths = undefined;
+        onnx.wasm.numThreads = 1;
+    }
 
     env.allowLocalModels = false;
     env.useBrowserCache = true;
