@@ -127,6 +127,19 @@ class StubVault {
     async cachedRead(file: TFile): Promise<string> {
         return readFile(join(this.root, file.path), "utf8");
     }
+
+    /** As Obsidian's: refuses a path that already exists. */
+    async create(path: string, data: string): Promise<TFile> {
+        if (existsSync(join(this.root, path))) {
+            throw new Error(`File already exists: ${path}`);
+        }
+        await writeFile(join(this.root, path), data);
+        return this.getFileByPath(path)!;
+    }
+
+    async modify(file: TFile, data: string): Promise<void> {
+        await writeFile(join(this.root, file.path), data);
+    }
 }
 
 /** Records what the plugin opened, so a test can assert on it. */
@@ -205,7 +218,16 @@ export class App {
     }
 }
 
-export const Platform = { isMobile: false, isMacOS: false };
+export const Platform = {
+    isMobile: false,
+    isMacOS: false,
+    isWin: false,
+    isLinux: true,
+    isIosApp: false,
+    isAndroidApp: false,
+};
+
+export const apiVersion = "0.0.0-test";
 
 /** The test's own events say which modifiers are held. */
 export const Keymap = {
