@@ -4,6 +4,7 @@
 
 import { PluginSettingTab, Setting, setIcon } from "obsidian";
 import type { App, PaneType } from "obsidian";
+import { REPORT_PATH } from "./diagnostics.js";
 import type GnosisPlugin from "./main.js";
 import { DEFAULT_BUILD_MODEL, QUERY_MODELS } from "./models.js";
 import type { Strategy, TitleBonus } from "./ranking.js";
@@ -52,6 +53,8 @@ export interface GnosisSettings {
     relatedIncludeLinked: boolean;
     /** Set once the related panel has been opened for the reader, so closing it sticks. */
     relatedPanelShown: boolean;
+    /** Replace note paths with tokens in the diagnostics report. */
+    redactReport: boolean;
 }
 
 /**
@@ -79,6 +82,7 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     honorExcluded: true,
     relatedIncludeLinked: false,
     relatedPanelShown: false,
+    redactReport: true,
 };
 
 /** Where the footer's links go. */
@@ -384,6 +388,48 @@ export class GnosisSettingTab extends PluginSettingTab {
             .setDesc(
                 "The CPU, through WebAssembly, on this device. Graphics-card acceleration " +
                     "(WebGPU) is not supported yet.",
+            );
+
+        this.heading(containerEl, "Diagnostics");
+
+        this.card(new Setting(containerEl))
+            .setName("Generate report")
+            .setDesc(
+                `Writes ${REPORT_PATH} to the vault root and opens it: versions, the index, your ` +
+                    "settings, this session's build and model timings, and recent errors. It never " +
+                    "contains your notes or your searches. Attach it to a bug report.",
+            )
+            .addButton((button) =>
+                button.setButtonText("Generate").onClick(() => {
+                    void this.plugin.generateReport();
+                }),
+            );
+
+        this.card(new Setting(containerEl))
+            .setName("Redact report")
+            .setDesc("Replace note paths with tokens (note-1, note-2, …); the same note gets the same token throughout.")
+            .addToggle((toggle) =>
+                toggle.setValue(this.plugin.settings.redactReport).onChange(async (on) => {
+                    this.plugin.settings.redactReport = on;
+                    await this.plugin.saveSettings();
+                }),
+            );
+
+        this.card(new Setting(containerEl))
+            .setName("Reset to defaults")
+            .setDesc(
+                "Put every setting back to its default, except where the index lives and whether " +
+                    "semantic search is on. Your index and the downloaded model are kept.",
+            )
+            .addButton((button) =>
+                button
+                    .setButtonText("Reset")
+                    .setWarning()
+                    .onClick(async () => {
+                        if (await this.plugin.resetSettings()) {
+                            this.display();
+                        }
+                    }),
             );
 
         this.footer(containerEl);

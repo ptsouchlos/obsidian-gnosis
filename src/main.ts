@@ -14,8 +14,8 @@
 //! Building an index uses the same model and the same consent, and gnosis's
 //! own `Builder` for everything the index contains — see `build/job.ts`.
 
-import { Notice, Platform, Plugin } from "obsidian";
-import type { WorkspaceLeaf } from "obsidian";
+import { Notice, Platform, Plugin, apiVersion } from "obsidian";
+import type { TFile, WorkspaceLeaf } from "obsidian";
 import type { Index } from "../vendor/gnosis-wasm/gnosis_wasm.js";
 import {
     ArtifactMissing,
@@ -28,10 +28,18 @@ import {
     type RawArtifact,
 } from "./artifact.js";
 import { IndexedDbCheckpoints, type CheckpointStore } from "./build/checkpoints.js";
-import { runBuild, type BuildProgress, type BuildSpec, type Note } from "./build/job.js";
+import { runBuild, type BuildProgress, type BuildResult, type BuildSpec, type Note } from "./build/job.js";
 import { replaceWarning, specForNewIndex, specFromManifest, statusLine } from "./build/plan.js";
 import { copyArtifact, manifestHash, removeArtifact, writeArtifact } from "./build/write.js";
 import { askConsent, confirm, downloadsFor, megabytes, type Download } from "./consent.js";
+import {
+    Diagnostics,
+    REPORT_PATH,
+    Redactor,
+    renderReport,
+    type BuildRecord,
+    type ModelLoadRecord,
+} from "./diagnostics.js";
 import {
     RUNTIME,
     queryVectors,
@@ -81,7 +89,12 @@ export default class GnosisPlugin extends Plugin {
     /** Asked before deleting the model. */
     confirmDelete: (lines: string[]) => Promise<boolean> = (lines) =>
         confirm(this.app, "Delete the model from this device?", lines, "Delete");
+    /** Asked before resetting settings. */
+    confirmReset: (lines: string[]) => Promise<boolean> = (lines) =>
+        confirm(this.app, "Reset Gnosis's settings?", lines, "Reset");
     isMobile = (): boolean => Platform.isMobile;
+    /** This session's events and timings, for the diagnostics report. */
+    readonly diagnostics = new Diagnostics();
 
     private building: AbortController | null = null;
     /** An open in progress, shared by everyone who asks meanwhile. */
@@ -209,15 +222,27 @@ export default class GnosisPlugin extends Plugin {
         if (this.index !== null) {
             return Promise.resolve({ index: this.index });
         }
-        this.opening ??= openArtifact(this.app, this.settings.artifactDir).then(
+        const dir = this.settings.artifactDir;
+        const startedAt = this.diagnostics.now();
+        this.opening ??= openArtifact(this.app, dir).then(
             (index) => {
                 this.opening = null;
                 this.index = index;
                 this.applySearchConfig();
+                const info = index.info() as IndexInfo;
+                this.diagnostics.record(
+                    "index",
+                    `opened ${dir} in ${this.diagnostics.now() - startedAt} ms: ${info.documents} documents, ` +
+                        `${info.chunks} chunks, vectors ${info.quantization}, text ${info.compression}`,
+                );
                 return { index };
             },
             (error: unknown) => {
                 this.opening = null;
+                this.diagnostics.record(
+                    error instanceof ArtifactMissing ? "index" : "error",
+                    error instanceof ArtifactMissing ? `no index in ${dir}` : `could not open ${dir}: ${describe(error)}`,
+                );
                 return { error };
             },
         );
@@ -307,6 +332,8 @@ export default class GnosisPlugin extends Plugin {
             try {
                 return index.lexicalSearch(query, this.settings.limit, undefined) as Hit[];
             } catch (error) {
+                // The query stays out of the log: it is the reader's own words.
+                this.diagnostics.record("error", `keyword search failed: ${describe(error)}`);
                 new Notice(`Gnosis: ${describe(error)}`);
                 return [];
             }
@@ -336,6 +363,7 @@ export default class GnosisPlugin extends Plugin {
                     const vectors = await queryVectors(embedder, space, query);
                     return index.search(query, vectors, this.settings.limit, undefined) as Hit[];
                 } catch (error) {
+                    this.diagnostics.record("error", `semantic search failed: ${describe(error)}`);
                     new Notice(`Gnosis: ${describe(error)}`);
                     return [];
                 }
@@ -414,9 +442,20 @@ export default class GnosisPlugin extends Plugin {
         this.embedder = state;
         this.embedderError = null;
         this.statusChanged();
+        const load: ModelLoadRecord = {
+            model: key,
+            startedAt: this.diagnostics.now(),
+            durationMs: null,
+            outcome: "loading",
+            error: null,
+        };
+        this.diagnostics.modelLoad = load;
         starting.then(
             (embedder) => {
                 progress.hide();
+                load.outcome = "loaded";
+                load.durationMs = this.diagnostics.now() - load.startedAt;
+                this.diagnostics.record("model", `loaded ${key} in ${load.durationMs} ms`);
                 if (this.embedder === state) {
                     state.ready = embedder;
                     this.statusChanged();
@@ -428,6 +467,10 @@ export default class GnosisPlugin extends Plugin {
             },
             (error: unknown) => {
                 progress.hide();
+                load.outcome = "failed";
+                load.durationMs = this.diagnostics.now() - load.startedAt;
+                load.error = describe(error);
+                this.diagnostics.record("error", `could not load ${key}: ${describe(error)}`);
                 if (this.embedder === state) {
                     this.embedder = null;
                     this.embedderError = describe(error);
@@ -581,11 +624,15 @@ export default class GnosisPlugin extends Plugin {
         const controller = new AbortController();
         this.building = controller;
         this.statusChanged();
+        const startedAt = this.diagnostics.now();
+        let run: BuildRun = { outcome: "not started" };
         try {
-            await this.runBuildCommand(controller.signal);
+            run = await this.runBuildCommand(controller.signal);
         } catch (error) {
+            run = { outcome: "failed", error: describe(error) };
             new Notice(`Gnosis: the index build failed — ${describe(error)}. The existing index is unchanged.`, 10_000);
         } finally {
+            this.recordBuild(startedAt, run);
             this.building = null;
             this.buildProgress = null;
             this.status?.remove();
@@ -663,7 +710,29 @@ export default class GnosisPlugin extends Plugin {
         );
     }
 
-    private async runBuildCommand(signal: AbortSignal): Promise<void> {
+    private recordBuild(startedAt: number, run: BuildRun): void {
+        const result = run.result ?? null;
+        const record: BuildRecord = {
+            startedAt,
+            durationMs: this.diagnostics.now() - startedAt,
+            outcome: run.outcome,
+            notes: result?.documents ?? null,
+            chunks: result?.chunks ?? null,
+            chunksEmbedded: result?.chunksEmbedded ?? null,
+            notesReused: result?.notesReused ?? null,
+            shardsWritten: run.shardsWritten ?? null,
+            error: run.error ?? null,
+        };
+        this.diagnostics.lastBuild = record;
+        this.diagnostics.record(
+            run.outcome === "failed" ? "error" : "build",
+            `build ${run.outcome} after ${record.durationMs} ms` +
+                (result === null ? "" : `: ${result.chunksEmbedded} chunks embedded`) +
+                (run.error === undefined ? "" : ` — ${run.error}`),
+        );
+    }
+
+    private async runBuildCommand(signal: AbortSignal): Promise<BuildRun> {
         const dir = this.settings.artifactDir;
         const vaultName = this.app.vault.getName();
 
@@ -681,14 +750,14 @@ export default class GnosisPlugin extends Plugin {
             : specFromManifest(live.manifestJson, vaultName);
         if ("refuse" in planned) {
             new Notice(`Gnosis: ${planned.refuse}`, 10_000);
-            return;
+            return { outcome: "not started", error: planned.refuse };
         }
         const spec = planned.spec;
 
         const liveHash = live === null ? null : await manifestHash(live.manifestJson);
         if (live !== null && liveHash !== this.lastWritten()) {
             if (!(await this.confirmReplace(replaceWarning(live.manifestJson, vaultName)))) {
-                return;
+                return { outcome: "not started" };
             }
         }
 
@@ -696,7 +765,7 @@ export default class GnosisPlugin extends Plugin {
         const model = queryModelFor(spec.model)!;
         const consented = this.settings.semanticSearch && this.embedder?.key === embedderKey(space);
         if (!consented && !(await this.askConsent(downloadsFor(spec.model, model, RUNTIME)))) {
-            return;
+            return { outcome: "not started" };
         }
         const embedder = await this.startEmbedder(space);
         await startWasm();
@@ -737,7 +806,7 @@ export default class GnosisPlugin extends Plugin {
                     `"Build index" picks up where this one stopped.`,
                 10_000,
             );
-            return;
+            return { outcome: "canceled", result };
         }
 
         // The live index may have changed while this ran — the CLI, or a
@@ -754,7 +823,7 @@ export default class GnosisPlugin extends Plugin {
         const currentHash = current === null ? null : await manifestHash(current.manifestJson);
         if (current !== null && currentHash !== liveHash && currentHash !== this.lastWritten()) {
             if (!(await this.confirmReplace(replaceWarning(current.manifestJson, vaultName)))) {
-                return;
+                return { outcome: "not written", result };
             }
         }
 
@@ -762,7 +831,7 @@ export default class GnosisPlugin extends Plugin {
         await this.checkpoints.clear(vault);
         if (written.upToDate) {
             new Notice(`Gnosis: the index is already up to date — ${result.documents.toLocaleString()} notes`);
-            return;
+            return { outcome: "already up to date", result, shardsWritten: 0 };
         }
         this.app.saveLocalStorage(LAST_WRITTEN_KEY, await manifestHash(result.artifact.manifestJson));
         this.closeIndex();
@@ -779,6 +848,7 @@ export default class GnosisPlugin extends Plugin {
                 `${written.written} of ${written.written + written.unchanged} shard(s) written.`,
             10_000,
         );
+        return { outcome: "indexed", result, shardsWritten: written.written };
     }
 
     /**
@@ -795,7 +865,8 @@ export default class GnosisPlugin extends Plugin {
             this.settings.honorExcluded && typeof ignored === "function" && ignored.call(this.app.metadataCache, path);
         return this.app.vault
             .getMarkdownFiles()
-            .filter((file) => !skip(file.path))
+            // The diagnostics report is about the plugin, not one of the notes.
+            .filter((file) => file.path !== REPORT_PATH && !skip(file.path))
             .map((file) => ({
             path: file.path,
             mtime: file.stat.mtime,
@@ -831,6 +902,7 @@ export default class GnosisPlugin extends Plugin {
             } catch (error) {
                 // Leave the original exactly as it was, and no half-copy.
                 await removeArtifact(adapter, to).catch(() => {});
+                this.diagnostics.record("error", `could not move the index from ${from} to ${to}: ${describe(error)}`);
                 new Notice(`Gnosis: could not move the index to ${to} — ${describe(error)}`, 10_000);
                 return false;
             }
@@ -872,6 +944,62 @@ export default class GnosisPlugin extends Plugin {
         return typeof id === "string" ? id : this.app.vault.getName();
     }
 
+    /**
+     * Write the diagnostics report to the vault root and open it.
+     *
+     * Built from this session's events and the same status the settings
+     * cards show. Redacted by default: every note path in it becomes a token.
+     */
+    async generateReport(): Promise<void> {
+        const report = renderReport({
+            generatedAt: this.diagnostics.now(),
+            pluginVersion: this.manifest.version,
+            obsidianVersion: apiVersion,
+            platform: platformName(),
+            artifactDir: this.settings.artifactDir,
+            index: await this.indexStatus(),
+            model: await this.modelStatus(),
+            settings: this.settings,
+            diagnostics: this.diagnostics,
+            redactor: this.settings.redactReport
+                ? new Redactor(this.app.vault.getMarkdownFiles().map((file) => file.path))
+                : null,
+        });
+        const vault = this.app.vault;
+        let file: TFile | null = vault.getFileByPath(REPORT_PATH);
+        if (file === null) {
+            file = await vault.create(REPORT_PATH, report);
+        } else {
+            await vault.modify(file, report);
+        }
+        await this.app.workspace.getLeaf(false).openFile(file);
+    }
+
+    /**
+     * Put every setting back to its default, after asking.
+     *
+     * Kept: where the index lives (resetting it would point away from the
+     * index without moving it), whether semantic search is on (the reader's
+     * own consent to a download), and whether the related panel has been
+     * shown. The index and the downloaded model are untouched.
+     */
+    async resetSettings(): Promise<boolean> {
+        const agreed = await this.confirmReset([
+            "Every setting goes back to its default, except where the index lives and whether " +
+                "semantic search is on.",
+            "Your index and the downloaded model are kept.",
+        ]);
+        if (!agreed) {
+            return false;
+        }
+        const { artifactDir, semanticSearch, relatedPanelShown } = this.settings;
+        this.settings = { ...DEFAULT_SETTINGS, artifactDir, semanticSearch, relatedPanelShown };
+        await this.saveSettings();
+        this.applySearchConfig();
+        new Notice("Gnosis: settings reset to defaults");
+        return true;
+    }
+
     async loadSettings(): Promise<void> {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     }
@@ -883,6 +1011,19 @@ export default class GnosisPlugin extends Plugin {
 
 /** Where this device remembers the manifest it last wrote, in `localStorage`. */
 const LAST_WRITTEN_KEY = "gnosis-last-written-manifest";
+/** How a build ended, for the diagnostics report. */
+interface BuildRun {
+    outcome: BuildRecord["outcome"];
+    result?: BuildResult;
+    shardsWritten?: number;
+    error?: string;
+}
+
+function platformName(): string {
+    const os = Platform.isMacOS ? "macOS" : Platform.isWin ? "Windows" : Platform.isLinux ? "Linux"
+        : Platform.isIosApp ? "iOS" : Platform.isAndroidApp ? "Android" : "unknown OS";
+    return `${Platform.isMobile ? "mobile" : "desktop"}, ${os}`;
+}
 
 function embedderKey(space: SpaceInfo): string {
     return `${space.queryModel}/${space.pooling}`;

@@ -34,6 +34,7 @@ await esbuild.build({
         "test/parity.test.ts",
         "test/real-vault.test.ts",
         "test/layout.test.ts",
+        "test/diagnostics.test.ts",
     ],
     bundle: true,
     outdir: ".test-build",

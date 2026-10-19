@@ -138,6 +138,35 @@ test("a vault with no index gets one, built here with the default model", async 
     assert.ok(notices.some((n) => n.includes("indexed 2 notes")), JSON.stringify(notices));
 });
 
+test("the diagnostics report records the build, and holds no note contents or paths", async () => {
+    const root = vaultCopy({ artifact: false });
+    const { plugin, app } = await load(root);
+    await plugin.buildIndex();
+    // An error that names a note, as a wasm error can.
+    plugin.diagnostics.record("error", "document 'notes/sourdough.md' not found");
+
+    await plugin.generateReport();
+    const report = readFileSync(join(root, "gnosis-report.md"), "utf8");
+    assert.deepEqual(app.workspace.opened, ["gnosis-report.md"], "the report is opened");
+
+    assert.match(report, /Gnosis 0\.0\.0-test/);
+    assert.match(report, /Obsidian 0\.0\.0-test/);
+    assert.match(report, /Platform: desktop, Linux/);
+    assert.match(report, /- State: Ready/);
+    assert.match(report, /indexed after \d+\.\d s/, "the last build and its duration");
+    assert.match(report, /- 2 notes, \d+ chunks: \d+ embedded, 0 notes unchanged/);
+    assert.match(report, /\| strategy \| "balanced" \|/, "settings are listed");
+    assert.match(report, /model · loaded bge-small-en-v1\.5\/cls in \d+ ms/, "the model load is timed");
+
+    assert.match(report, /document 'note-1' not found/, "a path in an error is a token");
+    assert.ok(!report.includes("sourdough.md") && !report.includes("hydration.md"), report);
+    assert.ok(!report.includes("wild yeast starter"), "never a note's contents");
+
+    // The report is a markdown file in the vault, but not one of the notes.
+    await plugin.buildIndex();
+    assert.equal((await info(root)).documents, 2, "the report is not indexed");
+});
+
 test("rebuilding an unchanged vault embeds nothing and writes nothing", async () => {
     const root = vaultCopy({ artifact: false });
     const first = await load(root);
