@@ -21,7 +21,9 @@ shows what comes back.
 - **Related notes** — the most similar notes to the current one, at *full*
   quality, because both sides of that comparison are vectors the index already
   carries. Notes the current one already links to are excluded, so what is left
-  is unlinked mentions.
+  is unlinked mentions. A map above the list puts the current note at the
+  center: a note's distance is its score, and notes alike to each other sit in
+  the same direction.
 - **Show index info** — what built the index, when, and how much it holds.
 
 **Semantic search, once you turn it on** (Settings → Semantic search):

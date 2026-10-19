@@ -254,6 +254,21 @@ test("related notes exclude the note itself and the ones it already links to", a
     assert.ok(linked.hits.some((h) => h.path === "notes/hydration.md"), "unless asked to include them");
 });
 
+test("related notes come with gnosis's pair scores between them, for the map", async () => {
+    const { plugin } = await load();
+    plugin.settings.relatedIncludeLinked = true;
+    const state = await plugin.relatedState("notes/sourdough.md");
+    assert.equal(state.kind, "ready");
+    const { hits, pairs } = state as { hits: Hit[]; pairs: (number | null)[][] | null };
+    assert.ok(pairs !== null, "the fixture has a text space");
+    assert.equal(pairs.length, hits.length);
+    pairs.forEach((row, i) => {
+        assert.equal(row.length, hits.length);
+        assert.equal(row[i], null, "a note is never related to itself");
+    });
+    assert.ok(hits.length < 2 || pairs.flat().some((s) => typeof s === "number"), JSON.stringify(pairs));
+});
+
 test("related on a note the index has never seen says the index is older than the note", async () => {
     const { plugin } = await load();
     const state = await plugin.relatedState("notes/written-after-the-export.md");

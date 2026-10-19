@@ -431,3 +431,60 @@
         transition: none;
     }
 }
+
+/* The related-notes map: the open note at the center, distance is score. */
+
+.gnosis-related-map {
+    display: block;
+    width: 100%;
+    max-width: 360px;
+    margin: 0 auto var(--size-4-3);
+    aspect-ratio: 1;
+}
+
+.gnosis-related-ring {
+    fill: none;
+    stroke: var(--background-modifier-border);
+    stroke-dasharray: 2 3;
+}
+
+.gnosis-related-center {
+    fill: var(--interactive-accent);
+}
+
+.gnosis-related-dot {
+    cursor: pointer;
+    outline: none;
+}
+
+.gnosis-related-dot circle {
+    fill: var(--text-muted);
+    transition: r 120ms ease;
+}
+
+.gnosis-related-dot text {
+    fill: var(--text-faint);
+    font-size: 7px;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.gnosis-related-dot.is-hovered circle {
+    fill: var(--interactive-accent);
+    r: 5;
+}
+
+.gnosis-related-dot.is-hovered text {
+    fill: var(--text-normal);
+    font-weight: var(--font-semibold);
+}
+
+.gnosis-related-row.is-hovered {
+    background: var(--background-modifier-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gnosis-related-dot circle {
+        transition: none;
+    }
+}

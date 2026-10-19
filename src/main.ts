@@ -240,7 +240,19 @@ export default class GnosisPlugin extends Plugin {
             // not in it, because it was written or renamed after the build.
             return { kind: "stale", path };
         }
-        return hits.length === 0 ? { kind: "empty", path } : { kind: "ready", path, hits };
+        if (hits.length === 0) {
+            return { kind: "empty", path };
+        }
+        // Pair scores between the results, for the map. A few milliseconds:
+        // it reads only these notes' chunks.
+        let pairs: (number | null)[][] | null;
+        try {
+            pairs = opened.index.similarities(hits.map((h) => h.path)) as (number | null)[][];
+        } catch {
+            // An index with no text space; the list still stands on its own.
+            pairs = null;
+        }
+        return { kind: "ready", path, hits, pairs };
     }
 
     /**

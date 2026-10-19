@@ -117,6 +117,25 @@ export class Index {
      */
     setSearchConfig(config: any): void;
     /**
+     * How related each of `paths` is to each other: a square array where row
+     * `i`, column `j` is the text-space score `related(paths[i])` ranks
+     * `paths[j]` by, or `null` on the diagonal and for a pair `related` would
+     * never list.
+     *
+     * For placing related notes relative to each other, which one `related`
+     * list cannot say. Calling `related` once per note instead costs a scan
+     * of every chunk per note — measured at ~0.5 s for 20 notes over 4,199
+     * chunks — and still misses most pairs past its limit. This reads only
+     * the listed notes' own chunks.
+     *
+     * Text space only, and raw: on an artifact with more than one space,
+     * `related` normalizes each space against its own result list before
+     * merging, so its numbers are not these. A pair scored on its own has no
+     * list to normalize against. On a text-only artifact they are the same
+     * numbers.
+     */
+    similarities(paths: string[]): any;
+    /**
      * Compare a client's own view of its vault against what the artifact
      * holds.
      *
@@ -149,6 +168,7 @@ export interface InitOutput {
     readonly index_search: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly index_searchConfig: (a: number, b: number) => void;
     readonly index_setSearchConfig: (a: number, b: number, c: number) => void;
+    readonly index_similarities: (a: number, b: number, c: number, d: number) => void;
     readonly index_staleness: (a: number, b: number, c: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
