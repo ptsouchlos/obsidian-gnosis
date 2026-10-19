@@ -13,13 +13,16 @@ export interface Download {
     what: string;
     from: string;
     bytes: number;
+    /** Set on the engine that runs the model on the graphics card. */
+    gpu?: boolean;
 }
 
-/** The downloads semantic search needs for `model`. */
+/** The downloads semantic search needs for `model`, on `device`. */
 export function downloadsFor(
     modelId: string,
     model: QueryModel,
     runtime: { url: string; bytes: number },
+    device: "wasm" | "webgpu" = "wasm",
 ): Download[] {
     return [
         {
@@ -27,11 +30,18 @@ export function downloadsFor(
             from: "huggingface.co",
             bytes: model.downloadBytes,
         },
-        {
-            what: "ONNX Runtime's WebAssembly engine, checked against a pinned hash",
-            from: new URL(runtime.url).host,
-            bytes: runtime.bytes,
-        },
+        device === "webgpu"
+            ? {
+                  what: "ONNX Runtime's WebGPU engine, which runs the model on your graphics card, checked against a pinned hash",
+                  from: new URL(runtime.url).host,
+                  bytes: runtime.bytes,
+                  gpu: true,
+              }
+            : {
+                  what: "ONNX Runtime's WebAssembly engine, checked against a pinned hash",
+                  from: new URL(runtime.url).host,
+                  bytes: runtime.bytes,
+              },
     ];
 }
 
@@ -48,6 +58,12 @@ export function consentLines(downloads: Download[]): string[] {
         ...downloads.map((d) => `• ${d.what} — ${megabytes(d.bytes)} from ${d.from}`),
         "Both are cached, so nothing is downloaded again. Your notes and your queries never " +
             "leave this device: nothing is uploaded, and the model runs locally.",
+        ...(downloads.some((d) => d.gpu)
+            ? [
+                  "Your graphics card indexes about 100 times faster than the CPU. To use the CPU " +
+                      "instead, set Compute to CPU in Gnosis's settings.",
+              ]
+            : []),
     ];
 }
 

@@ -15,7 +15,7 @@ import test from "node:test";
 import { App, notices, openedModals } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
 import { consentLines, type Download } from "../src/consent.js";
-import { queryVectors, unsupportedReason, type EmbedderFactory, type TextEmbedder } from "../src/embedder.js";
+import { RUNTIMES, queryVectors, unsupportedReason, type EmbedderFactory, type TextEmbedder } from "../src/embedder.js";
 import { MemoryModelStore } from "../src/model-store.js";
 import type { QueryModel } from "../src/models.js";
 import { modelStatus } from "../src/status.js";
@@ -46,17 +46,20 @@ class StandIn implements TextEmbedder {
 interface Harness {
     plugin: GnosisPlugin;
     consented: Download[][];
-    started: { model: QueryModel; pooling: string }[];
+    started: { model: QueryModel; pooling: string; device: string }[];
 }
 
 /**
  * A plugin over the fixture vault whose model loads instantly as `embedder`,
- * and whose reader answers the consent prompt with `agree`.
+ * and whose reader answers the consent prompt with `agree`. `gpu`: whether
+ * WebGPU offers an adapter; `gpuHeld`: whether its runtime is already here.
  */
 async function load(options: {
     embedder?: TextEmbedder;
     agree?: boolean;
     factory?: EmbedderFactory;
+    gpu?: boolean;
+    gpuHeld?: boolean;
 }): Promise<Harness> {
     notices.length = 0;
     openedModals.length = 0;
@@ -64,14 +67,20 @@ async function load(options: {
     const plugin = new GnosisPlugin(app as never, { id: "gnosis", version: "0.0.0-test" } as never);
     await plugin.onload();
     const harness: Harness = { plugin, consented: [], started: [] };
+    plugin.hasWebgpu = async () => options.gpu ?? false;
+    const store = new MemoryModelStore();
+    if (options.gpuHeld) {
+        store.runtimes.set(RUNTIMES.webgpu.url, RUNTIMES.webgpu.bytes);
+    }
+    plugin.modelStore = store;
     plugin.askConsent = async (downloads) => {
         harness.consented.push(downloads);
         return options.agree ?? true;
     };
     plugin.embedderFactory =
         options.factory ??
-        (async (model, pooling, onProgress) => {
-            harness.started.push({ model, pooling });
+        (async (model, pooling, onProgress, device) => {
+            harness.started.push({ model, pooling, device });
             onProgress({ file: "onnx/model.onnx", loaded: 50_000_000, total: 127_000_000 });
             onProgress({ file: "onnxruntime-web.wasm", loaded: 13_600_000, total: 13_600_000 });
             return options.embedder ?? new StandIn([1, 0, 0, 0]);
@@ -119,6 +128,46 @@ test("turning semantic search on asks first, and says what it downloads", async 
     assert.equal(started.length, 1);
     assert.equal(started[0]!.model.revision, "ea104dacec62c0de699686887e3f920caeb4f3e3");
     assert.equal(started[0]!.pooling, "cls", "pooling comes from the index, not a guess");
+});
+
+test("with no graphics card, the CPU engine is what is asked about and used", async () => {
+    const { plugin, consented, started } = await load({ gpu: false });
+    assert.equal(await plugin.enableSemanticSearch(), true);
+    assert.equal(consented[0]![1]!.bytes, RUNTIMES.wasm.bytes);
+    assert.match(consented[0]![1]!.what, /WebAssembly engine/);
+    assert.equal(started[0]!.device, "wasm");
+    assert.equal(plugin.runningOn(), "wasm");
+});
+
+test("with a graphics card, turning semantic search on names the WebGPU engine and uses it", async () => {
+    const { plugin, consented, started } = await load({ gpu: true });
+    assert.equal(await plugin.enableSemanticSearch(), true);
+    const runtime = consented[0]![1]!;
+    assert.equal(runtime.bytes, RUNTIMES.webgpu.bytes);
+    assert.match(runtime.what, /WebGPU engine/);
+    assert.ok(
+        consentLines(consented[0]!).some((l) => l.includes("set Compute to CPU")),
+        "the prompt says how to choose the CPU instead",
+    );
+    assert.equal(started[0]!.device, "webgpu");
+});
+
+test("Compute set to CPU uses the CPU even with a graphics card", async () => {
+    const { plugin, consented, started } = await load({ gpu: true });
+    plugin.settings.compute = "cpu";
+    assert.equal(await plugin.enableSemanticSearch(), true);
+    assert.equal(consented[0]![1]!.bytes, RUNTIMES.wasm.bytes);
+    assert.equal(started[0]!.device, "wasm");
+});
+
+test("a search never downloads the WebGPU engine unasked, and uses it once it is here", async () => {
+    const without = await load({ gpu: true });
+    without.plugin.settings.semanticSearch = true;
+    assert.equal(await without.plugin.chooseDevice(true), "wasm", "an unattended start keeps to the CPU");
+    assert.equal(await without.plugin.chooseDevice(false), "webgpu", "a start that asks may name it");
+
+    const held = await load({ gpu: true, gpuHeld: true });
+    assert.equal(await held.plugin.chooseDevice(true), "webgpu");
 });
 
 test("declining the prompt downloads nothing and leaves search lexical", async () => {
@@ -286,6 +335,8 @@ test("deleting the model asks, turns semantic search off, and frees only its fil
     const store = new MemoryModelStore();
     store.held_.add("Xenova/bge-small-en-v1.5");
     store.held_.add("someone-elses/model");
+    store.runtimes.set(RUNTIMES.wasm.url, RUNTIMES.wasm.bytes);
+    store.runtimes.set(RUNTIMES.webgpu.url, RUNTIMES.webgpu.bytes);
     plugin.modelStore = store;
     await plugin.enableSemanticSearch();
 
@@ -304,6 +355,7 @@ test("deleting the model asks, turns semantic search off, and frees only its fil
     assert.equal(plugin.settings.semanticSearch, false, "or the next search would download it again");
     assert.equal(embedder.disposed, true);
     assert.deepEqual([...store.held_], ["someone-elses/model"], "another plugin's model is left alone");
+    assert.equal(store.runtimes.size, 0, "both engines, CPU and WebGPU, are removed");
     assert.ok(notices.some((n) => n.includes("MB freed")), JSON.stringify(notices));
     assert.equal((await plugin.modelStatus()).state, "absent");
 });
