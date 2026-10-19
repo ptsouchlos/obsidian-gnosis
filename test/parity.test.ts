@@ -30,6 +30,7 @@ import test from "node:test";
 
 import { App } from "./stubs/obsidian.js";
 import { openArtifact } from "../src/artifact.js";
+import { SHARD_DOCS } from "../src/build/plan.js";
 import { queryModelFor } from "../src/models.js";
 import type { Hit, IndexInfo } from "../src/types.js";
 
@@ -120,9 +121,10 @@ test("the plugin's model reproduces the vectors gnosis stored", options, async (
  *
  * The vault is copied without its index and built from nothing by the
  * plugin's own build command, with the real model under node. The comparison
- * is against a CLI export at the same quantization, which defaults to i8:
+ * is against a CLI export at the same quantization, which defaults to i8,
+ * and the same shard size, `SHARD_DOCS` in `src/build/plan.ts`:
  *
- *   gnosis export --quantize i8 --out .gnosis/artifact-i8
+ *   gnosis export --quantize i8 --shard-docs <SHARD_DOCS> --out .gnosis/artifact-i8
  *
  * The vault has to be indexed with images off (`[embed.image] enabled =
  * false`, image files ignored): the plugin builds notes only, so each image
@@ -143,7 +145,11 @@ test("the plugin builds the index the CLI built", options, async () => {
     const { basename, join } = await import("node:path");
     const cliDir = join(vault!, i8);
     if (!existsSync(join(cliDir, "manifest.json"))) {
-        throw new Error(`no CLI export at ${cliDir}: run gnosis export --quantize i8 --out ${i8}`);
+        throw new Error(`no CLI export at ${cliDir}: run gnosis export --quantize i8 --shard-docs ${SHARD_DOCS} --out ${i8}`);
+    }
+    const exported = JSON.parse(readFileSync(join(cliDir, "manifest.json"), "utf8")).shard_docs;
+    if (exported !== SHARD_DOCS) {
+        throw new Error(`${cliDir} was exported with --shard-docs ${exported}; the plugin builds with ${SHARD_DOCS}`);
     }
 
     // The same folder name: the CLI labels a vault by it, and so does the plugin.

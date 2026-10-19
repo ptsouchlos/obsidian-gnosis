@@ -15,10 +15,12 @@ import test from "node:test";
 import { App, notices } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
 import { MemoryCheckpoints } from "../src/build/checkpoints.js";
-import { replaceWarning, statusLine } from "../src/build/plan.js";
+import { SHARD_DOCS, replaceWarning, specForNewIndex, specFromManifest, statusLine } from "../src/build/plan.js";
 import type { TextEmbedder } from "../src/embedder.js";
 import type { IndexInfo } from "../src/types.js";
-import { openArtifact } from "../src/artifact.js";
+import { openArtifact, readArtifact } from "../src/artifact.js";
+import { runBuild } from "../src/build/job.js";
+import { manifestHash, writeArtifact } from "../src/build/write.js";
 import { stalenessLine } from "../src/staleness.js";
 
 declare const GNOSIS_TEST_VAULT: string;
@@ -365,6 +367,26 @@ test("the replace warning is silent about what a rebuild keeps", () => {
     assert.equal(lines.length, 2, `no image or folder warning for a plain one-vault index: ${lines}`);
 });
 
+test("a rebuild keeps another writer's shard size, and moves its own to the plugin's", () => {
+    const manifest = JSON.stringify({
+        created_unix: 0,
+        quantization: "i8",
+        compression: "deflate",
+        roots: ["vault"],
+        spaces: [{ space: "text", model: { id: "bge-small-en-v1.5", pooling: "cls", dim: 384, query_prefix: "", document_prefix: "" } }],
+        shard_docs: 64,
+        shards: [{ documents: 3 }],
+    });
+    const theirs = specFromManifest(manifest, "vault", false);
+    const ours = specFromManifest(manifest, "vault", true);
+    assert.ok("spec" in theirs && "spec" in ours);
+    assert.equal(theirs.spec.shardDocs, 64, "the CLI's --shard-docs survives a rebuild here");
+    assert.equal(ours.spec.shardDocs, SHARD_DOCS);
+    const fresh = specForNewIndex("bge-small-en-v1.5", "vault");
+    assert.ok("spec" in fresh);
+    assert.equal(fresh.spec.shardDocs, SHARD_DOCS);
+});
+
 // The settings tab's index card. Its states are decided by `indexStatus`,
 // so these drive the real plugin through each one rather than the drawing.
 
@@ -588,4 +610,41 @@ test("the staleness line names only what there is", () => {
     assert.equal(stalenessLine(s(0, 3, 0)), "3 new notes since the last update.");
     assert.equal(stalenessLine(s(0, 0, 1)), "1 note deleted since the last update.");
     assert.equal(stalenessLine(s(0, 3, 2)), "3 new notes, 2 deleted since the last update.");
+});
+
+test("an index this device wrote at the old shard size moves to the new one, embedding nothing", async () => {
+    const root = vaultCopy({ artifact: false, extraNotes: 40 });
+    const harness = await load(root);
+    const { plugin, app, embedder } = harness;
+
+    // What an earlier version of the plugin wrote: one shard of up to 256.
+    const planned = specForNewIndex("bge-small-en-v1.5", app.vault.getName());
+    assert.ok("spec" in planned);
+    const old = await runBuild({
+        spec: { ...planned.spec, shardDocs: 256 },
+        notes: app.vault.getMarkdownFiles().map((file) => ({
+            path: file.path,
+            mtime: file.stat.mtime,
+            read: () => app.vault.cachedRead(file),
+        })),
+        base: null,
+        embed: (texts) => embedder.embed(texts),
+        checkpoint: async () => {},
+        signal: new AbortController().signal,
+        onProgress: () => {},
+        now: () => Date.now(),
+        yieldToUi: async () => {},
+    });
+    await writeArtifact(app.vault.adapter as never, ARTIFACT, old.artifact!);
+    app.local.set("gnosis-last-written-manifest", await manifestHash(old.artifact!.manifestJson));
+    assert.equal((await readArtifact(app as never, ARTIFACT)).shards.size, 1);
+    embedder.seen.length = 0;
+
+    await plugin.buildIndex();
+    const manifest = JSON.parse(readFileSync(join(root, ARTIFACT, "manifest.json"), "utf8"));
+    assert.equal(manifest.shard_docs, SHARD_DOCS);
+    assert.equal(manifest.shards.length, Math.ceil(42 / SHARD_DOCS), "42 notes now span shards");
+    assert.deepEqual(embedder.seen, [], "every note's vectors are reused");
+    assert.equal(harness.replaces.length, 0, "an index this device wrote is not asked about");
+    assert.ok(!existsSync(join(root, ARTIFACT, "shard-0002.bin")), "no stray shard left behind");
 });

@@ -774,16 +774,16 @@ export default class GnosisPlugin extends Plugin {
             }
         }
 
+        const liveHash = live === null ? null : await manifestHash(live.manifestJson);
         const planned = live === null
             ? specForNewIndex(this.settings.buildModel, vaultName)
-            : specFromManifest(live.manifestJson, vaultName);
+            : specFromManifest(live.manifestJson, vaultName, liveHash === this.lastWritten());
         if ("refuse" in planned) {
             new Notice(`Gnosis: ${planned.refuse}`, 10_000);
             return { outcome: "not started", error: planned.refuse };
         }
         const spec = planned.spec;
 
-        const liveHash = live === null ? null : await manifestHash(live.manifestJson);
         if (live !== null && liveHash !== this.lastWritten()) {
             if (!(await this.confirmReplace(replaceWarning(live.manifestJson, vaultName)))) {
                 return { outcome: "not started" };
