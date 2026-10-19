@@ -47,7 +47,7 @@ export interface GnosisSettings {
     modOpen: PaneType;
     /** The key hints under a picker's results. */
     keyboardHints: boolean;
-    /** Each result's score beside its title. */
+    /** Each result's score and what it is made of. */
     showScores: boolean;
     /** Leave out what Obsidian's "Excluded files" leaves out, when building. */
     honorExcluded: boolean;
@@ -84,7 +84,7 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     titleBonus: "default",
     modOpen: "tab",
     keyboardHints: true,
-    showScores: false,
+    showScores: true,
     honorExcluded: true,
     relatedIncludeLinked: false,
     relatedPanelShown: false,
@@ -393,8 +393,9 @@ export class GnosisSettingTab extends PluginSettingTab {
         this.card(new Setting(containerEl))
             .setName("Show scores")
             .setDesc(
-                "Show each result's score beside its title. Higher is a closer match; for related " +
-                    "notes it is how similar the two notes are.",
+                "Show what each result's score is made of: in search, the match and its parts " +
+                    "(meaning, keywords, and the title bonus); for related notes, how similar the two " +
+                    "notes are.",
             )
             .addToggle((toggle) =>
                 toggle.setValue(this.plugin.settings.showScores).onChange(async (on) => {

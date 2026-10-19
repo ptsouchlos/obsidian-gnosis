@@ -1,9 +1,9 @@
 //! Search, as pickers: keywords alone, or blended with meaning.
 
-import { Keymap, Platform, SuggestModal } from "obsidian";
-import type { App, PaneType } from "obsidian";
+import { Keymap, Notice, Platform, SuggestModal, getAllTags } from "obsidian";
+import type { App, PaneType, TFile } from "obsidian";
 import type { Hit } from "./types.js";
-import { formatScore, hitSnippet, hitSubtitle, noteName, resolveHit } from "./results.js";
+import { hitSnippet, hitSubtitle, metaLine, noteName, resolveHit, scoreLine } from "./results.js";
 
 /** How results are shown and opened, read when a picker opens. */
 export interface Display {
@@ -11,7 +11,15 @@ export interface Display {
     modOpen: PaneType;
     keyboardHints: boolean;
     showScores: boolean;
+    /**
+     * The keywords' share of the blend, for a keyword-only search, whose
+     * scores are on that scale (see `scoreLine`); null where meaning is blended in.
+     */
+    keywordShare: number | null;
 }
+
+/** What choosing a result does: open it, or hand over a link to it. */
+type Action = "open" | "insert" | "copy";
 
 /**
  * Where a chosen result opens.
@@ -30,8 +38,20 @@ export function paneFor(evt: MouseEvent | KeyboardEvent | undefined, modOpen: Pa
 
 const PANE_WORDS: Record<PaneType, string> = { tab: "a new tab", split: "a new split", window: "a new window" };
 
+async function copyLink(link: string, file: TFile): Promise<void> {
+    try {
+        await navigator.clipboard.writeText(link);
+        new Notice(`Gnosis: copied a link to ${file.basename}`);
+    } catch {
+        new Notice("Gnosis: could not copy to the clipboard");
+    }
+}
+
 /** Shared rendering and opening, so every picker behaves identically. */
 abstract class HitModal extends SuggestModal<Hit> {
+    /** Set by a key just before it chooses the selected result. */
+    private action: Action = "open";
+
     protected constructor(
         app: App,
         protected readonly display: Display,
@@ -42,32 +62,62 @@ abstract class HitModal extends SuggestModal<Hit> {
             this.selectActiveSuggestion(evt);
             return false;
         });
+        // The other actions choose the selected result too, saying how, so
+        // they act on exactly what the reader sees highlighted.
+        this.scope.register(["Shift"], "Enter", (evt) => {
+            this.action = "insert";
+            this.selectActiveSuggestion(evt);
+            return false;
+        });
+        this.scope.register(["Mod", "Shift"], "c", (evt) => {
+            this.action = "copy";
+            this.selectActiveSuggestion(evt);
+            return false;
+        });
         if (display.keyboardHints) {
+            const mod = Platform.isMacOS ? "⌘" : "Ctrl";
             this.setInstructions([
                 { command: "↑↓", purpose: "to navigate" },
                 { command: "↵", purpose: "to open" },
-                { command: `${Platform.isMacOS ? "⌘" : "Ctrl"} ↵`, purpose: `to open in ${PANE_WORDS[display.modOpen]}` },
+                { command: `${mod} ↵`, purpose: `to open in ${PANE_WORDS[display.modOpen]}` },
+                { command: "⇧ ↵", purpose: "to insert a link" },
+                { command: `${mod} ⇧ C`, purpose: "to copy a link" },
                 { command: "esc", purpose: "to dismiss" },
             ]);
         }
     }
 
+    /** The keywords' share of the blend if these results are keywords alone, else null. */
+    protected keywordShare(): number | null {
+        return this.display.keywordShare;
+    }
+
     override renderSuggestion(hit: Hit, el: HTMLElement): void {
-        if (this.display.showScores) {
-            // The score as gnosis computed it — the same number at any rank —
-            // rather than a percentage of the top hit, which reads 100% even
-            // for a poor match.
-            el.createEl("span", { cls: "gnosis-hit-score", text: formatScore(hit.score) });
-        }
         el.createEl("div", { cls: "gnosis-hit-title", text: noteName(hit) });
-        el.createEl("div", { cls: "gnosis-hit-detail", text: hitSubtitle(hit) });
+        el.createEl("div", { cls: "gnosis-hit-detail", text: `› ${hitSubtitle(hit)}` });
         const snippet = hitSnippet(hit);
         if (snippet !== "") {
             el.createEl("div", { cls: "gnosis-hit-snippet", text: snippet });
         }
+        const file = resolveHit(this.app, hit);
+        if (file !== null) {
+            const cache = this.app.metadataCache.getFileCache(file);
+            const meta = metaLine(cache?.frontmatter?.["created"], file.stat.mtime, cache === null ? [] : getAllTags(cache) ?? []);
+            if (meta !== "") {
+                el.createEl("div", { cls: "gnosis-hit-meta", text: meta });
+            }
+        }
+        if (this.display.showScores) {
+            // The score as gnosis computed it — the same number at any rank —
+            // rather than a share of the top hit, which reads 100% even for a
+            // poor match; then what made it.
+            el.createEl("div", { cls: "gnosis-hit-scores", text: scoreLine(hit, this.keywordShare()) });
+        }
     }
 
     override onChooseSuggestion(hit: Hit, evt?: MouseEvent | KeyboardEvent): void {
+        const action = this.action;
+        this.action = "open";
         const file = resolveHit(this.app, hit);
         if (file === null) {
             // The index knows a document the vault no longer has. Reporting it
@@ -76,7 +126,23 @@ abstract class HitModal extends SuggestModal<Hit> {
             this.showMissing(hit);
             return;
         }
-        void this.app.workspace.getLeaf(paneFor(evt, this.display.modOpen)).openFile(file);
+        if (action === "open") {
+            void this.app.workspace.getLeaf(paneFor(evt, this.display.modOpen)).openFile(file);
+            return;
+        }
+        // The link as Obsidian would write it, honoring the reader's wikilink
+        // or Markdown setting and making a path relative to the open note.
+        const editor = this.app.workspace.activeEditor;
+        const link = this.app.fileManager.generateMarkdownLink(file, editor?.file?.path ?? "");
+        if (action === "insert") {
+            if (editor?.editor === undefined) {
+                new Notice("Gnosis: open a note to insert a link into");
+                return;
+            }
+            editor.editor.replaceSelection(link);
+            return;
+        }
+        void copyLink(link, file);
     }
 
     protected abstract showMissing(hit: Hit): void;
@@ -117,11 +183,17 @@ export class SemanticSearchModal extends HitModal {
     /** Bumped per keystroke, so a slow answer to an old query is dropped. */
     private ticket = 0;
     private last: Hit[] = [];
+    /** As answered: keywords alone while the model loads, then the blend. */
+    private share: number | null = null;
 
     constructor(
         app: App,
         display: Display,
-        private readonly runSearch: (query: string) => Promise<Hit[]>,
+        /**
+         * The results, and the keywords' share of the blend when they are
+         * keywords alone (the model not yet loaded), else null.
+         */
+        private readonly runSearch: (query: string) => Promise<{ hits: Hit[]; keywordShare: number | null }>,
         semantic: boolean,
         private readonly notify: (message: string) => void,
         private readonly debounceMs = 150,
@@ -146,11 +218,16 @@ export class SemanticSearchModal extends HitModal {
         if (ticket !== this.ticket) {
             return this.last;
         }
-        const hits = await this.runSearch(query);
+        const { hits, keywordShare } = await this.runSearch(query);
         if (ticket === this.ticket) {
             this.last = hits;
+            this.share = keywordShare;
         }
         return hits;
+    }
+
+    protected override keywordShare(): number | null {
+        return this.share;
     }
 
     protected override showMissing(hit: Hit): void {

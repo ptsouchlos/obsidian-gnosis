@@ -211,9 +211,22 @@ test("while the model is still loading, search answers with keywords", async () 
     search(plugin);
     await waitFor("the search modal", () => openedModals.length > 0);
 
-    const hits = (await openedModals.at(-1)!.type("baker's percentages")) as Hit[];
+    const modal = openedModals.at(-1)!;
+    const hits = (await modal.type("baker's percentages")) as Hit[];
     assert.equal(hits[0]?.path, "notes/hydration.md", "lexical results, not an empty picker");
+    // Scored as what they are: keywords alone, not a blend with no meaning in it.
+    const texts: string[] = [];
+    const el = { createEl: (_tag: string, o?: { text?: string }) => (o?.text !== undefined && texts.push(o.text), el) };
+    modal.renderSuggestion(hits[0]!, el as never);
+    assert.ok(texts.some((t) => t.startsWith("Keywords ")), JSON.stringify(texts));
+
     release(new StandIn([1, 0, 0, 0]));
+    await waitFor("the model", () => plugin.runningOn() !== null && (plugin as never as { embedder: { ready: unknown } }).embedder.ready !== null);
+    const blended = (await modal.type("baker's percentages")) as Hit[];
+    const after: string[] = [];
+    const el2 = { createEl: (_tag: string, o?: { text?: string }) => (o?.text !== undefined && after.push(o.text), el2) };
+    modal.renderSuggestion(blended[0]!, el2 as never);
+    assert.ok(after.some((t) => t.startsWith("Match ")), JSON.stringify(after));
 });
 
 test("a model that fails to load says so and can be retried", async () => {

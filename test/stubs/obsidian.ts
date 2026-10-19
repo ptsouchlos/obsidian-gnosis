@@ -159,6 +159,8 @@ class StubVault {
 /** Records what the plugin opened, so a test can assert on it. */
 class StubWorkspace {
     activeFile: TFile | null = null;
+    /** The editor a link is inserted into, when a test opens one. */
+    activeEditor: { file: TFile | null; editor?: { replaceSelection(text: string): void } } | null = null;
     opened: string[] = [];
     /** Where each open went: `false` for the current tab, else a pane type. */
     panes: unknown[] = [];
@@ -213,8 +215,15 @@ export class App {
     readonly workspace = new StubWorkspace();
     /** Obsidian's "Excluded files", as path prefixes; the real one compiles patterns. */
     readonly excluded: string[] = [];
+    /** Per-file metadata, as Obsidian's cache would parse it; tests fill it in. */
+    readonly fileCaches = new Map<string, { frontmatter?: Record<string, unknown>; tags?: { tag: string }[] }>();
     readonly metadataCache = {
         isUserIgnored: (path: string): boolean => this.excluded.some((prefix) => path.startsWith(prefix)),
+        getFileCache: (file: TFile) => this.fileCaches.get(file.path) ?? null,
+    };
+    /** Links as Obsidian writes them with wikilinks on. */
+    readonly fileManager = {
+        generateMarkdownLink: (file: TFile, _sourcePath: string): string => `[[${file.basename}]]`,
     };
     /** Obsidian's per-vault, per-device `localStorage`. */
     readonly local = new Map<string, unknown>();
@@ -242,6 +251,13 @@ export const Platform = {
 };
 
 export const apiVersion = "0.0.0-test";
+
+/** Tags from the body and the frontmatter, `#`-prefixed, as Obsidian's does. */
+export function getAllTags(cache: { frontmatter?: Record<string, unknown>; tags?: { tag: string }[] }): string[] {
+    const fromFront = cache.frontmatter?.["tags"];
+    const front = Array.isArray(fromFront) ? fromFront.map((t) => `#${String(t)}`) : [];
+    return [...(cache.tags ?? []).map((t) => t.tag), ...front];
+}
 
 /** The test's own events say which modifiers are held. */
 export const Keymap = {
