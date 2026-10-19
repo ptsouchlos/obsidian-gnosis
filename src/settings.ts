@@ -4,6 +4,7 @@
 
 import { PluginSettingTab, Setting, setIcon } from "obsidian";
 import type { App, PaneType } from "obsidian";
+import { QUIET_MS } from "./auto-update.js";
 import { REPORT_PATH } from "./diagnostics.js";
 import type GnosisPlugin from "./main.js";
 import { DEFAULT_BUILD_MODEL, QUERY_MODELS } from "./models.js";
@@ -56,6 +57,8 @@ export interface GnosisSettings {
     relatedPanelShown: boolean;
     /** Replace note paths with tokens in the diagnostics report. */
     redactReport: boolean;
+    /** Update an index this device built once edits settle; see `auto-update.ts`. */
+    autoUpdate: boolean;
 }
 
 /**
@@ -84,6 +87,7 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     relatedIncludeLinked: false,
     relatedPanelShown: false,
     redactReport: true,
+    autoUpdate: true,
 };
 
 /** Where the footer's links go. */
@@ -132,7 +136,11 @@ export class GnosisSettingTab extends PluginSettingTab {
                 if (index.state === "ready" && !progressOnly) {
                     const stale = await this.plugin.vaultStaleness();
                     if (stale !== null && ticket === this.ticket) {
-                        this.renderIndexCard(card, { ...index, detail: stalenessLine(stale) });
+                        const skipped = this.plugin.autoSkipped;
+                        this.renderIndexCard(card, {
+                            ...index,
+                            detail: skipped === null ? stalenessLine(stale) : `${stalenessLine(stale)} ${skipped}`,
+                        });
                     }
                 }
             });
@@ -191,6 +199,26 @@ export class GnosisSettingTab extends PluginSettingTab {
                 this.display();
             },
         );
+
+        this.card(new Setting(containerEl))
+            .setName("Update automatically")
+            .setDesc(
+                `Once you have stopped editing for ${QUIET_MS / 60_000} minutes, update the index with the notes ` +
+                    "that changed, and check again when Obsidian starts. Only for an index built on this " +
+                    "device, with semantic search on; an index the gnosis CLI or another device wrote is " +
+                    "updated only when you ask.",
+            )
+            .addToggle((toggle) =>
+                toggle.setValue(this.plugin.settings.autoUpdate).onChange(async (on) => {
+                    this.plugin.settings.autoUpdate = on;
+                    await this.plugin.saveSettings();
+                    if (on) {
+                        this.plugin.autoUpdater.poke();
+                    } else {
+                        this.plugin.autoUpdater.stop();
+                    }
+                }),
+            );
 
         const advanced = containerEl.createEl("details", { cls: "gnosis-advanced" });
         advanced.createEl("summary", { text: "Advanced" });

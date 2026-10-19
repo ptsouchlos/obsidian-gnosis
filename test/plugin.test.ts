@@ -331,6 +331,8 @@ test("the panel is a page-preview source, so hovering a result previews it", asy
 test("the panel opens by itself the first time, and never again once closed", async () => {
     const { app, plugin } = await load();
     for (const ready of app.workspace.layoutReady) ready();
+    // Layout-ready also arms the automatic update's startup check; not this test's.
+    plugin.autoUpdater.stop();
     await waitFor("the panel", () => app.workspace.getLeavesOfType("gnosis-related").length === 1);
     assert.equal(plugin.settings.relatedPanelShown, true);
 
@@ -339,6 +341,7 @@ test("the panel opens by itself the first time, and never again once closed", as
     const again = await load();
     again.plugin.settings.relatedPanelShown = true;
     for (const ready of again.app.workspace.layoutReady) ready();
+    again.plugin.autoUpdater.stop();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(again.app.workspace.getLeavesOfType("gnosis-related").length, 0);
 });

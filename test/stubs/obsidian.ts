@@ -140,6 +140,20 @@ class StubVault {
     async modify(file: TFile, data: string): Promise<void> {
         await writeFile(join(this.root, file.path), data);
     }
+
+    /** Vault events, fired by a test with `emit` rather than by a file watcher. */
+    private readonly handlers = new Map<string, ((...args: unknown[]) => unknown)[]>();
+
+    on(name: string, callback: (...args: never[]) => unknown): { name: string } {
+        this.handlers.set(name, [...(this.handlers.get(name) ?? []), callback as (...args: unknown[]) => unknown]);
+        return { name };
+    }
+
+    emit(name: string, ...args: unknown[]): void {
+        for (const handler of this.handlers.get(name) ?? []) {
+            handler(...args);
+        }
+    }
 }
 
 /** Records what the plugin opened, so a test can assert on it. */
@@ -289,6 +303,8 @@ export class Plugin {
     }
 
     addSettingTab(_tab: unknown): void {}
+
+    registerEvent(_ref: unknown): void {}
 
     readonly views = new Map<string, unknown>();
 

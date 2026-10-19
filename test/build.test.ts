@@ -22,6 +22,7 @@ import { openArtifact, readArtifact } from "../src/artifact.js";
 import { runBuild } from "../src/build/job.js";
 import { manifestHash, writeArtifact } from "../src/build/write.js";
 import { stalenessLine } from "../src/staleness.js";
+import { AutoUpdater, QUIET_MS } from "../src/auto-update.js";
 
 declare const GNOSIS_TEST_VAULT: string;
 
@@ -647,4 +648,176 @@ test("an index this device wrote at the old shard size moves to the new one, emb
     assert.deepEqual(embedder.seen, [], "every note's vectors are reused");
     assert.equal(harness.replaces.length, 0, "an index this device wrote is not asked about");
     assert.ok(!existsSync(join(root, ARTIFACT, "shard-0002.bin")), "no stray shard left behind");
+});
+
+// ---- Automatic updates ----------------------------------------------------------
+
+/** Timers that fire only when a test says time has passed. */
+class FakeClock {
+    private now = 0;
+    private next = 0;
+    private readonly timers = new Map<number, { at: number; fn: () => void }>();
+
+    set(fn: () => void, ms: number): unknown {
+        this.timers.set(++this.next, { at: this.now + ms, fn });
+        return this.next;
+    }
+
+    clear(handle: unknown): void {
+        this.timers.delete(handle as number);
+    }
+
+    get pending(): number {
+        return this.timers.size;
+    }
+
+    advance(ms: number): void {
+        this.now += ms;
+        for (const [id, timer] of [...this.timers]) {
+            if (timer.at <= this.now) {
+                this.timers.delete(id);
+                timer.fn();
+            }
+        }
+    }
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test("the updater waits for edits to settle, and runs once per burst", async () => {
+    const clock = new FakeClock();
+    let runs = 0;
+    let release: () => void = () => {};
+    const updater = new AutoUpdater(() => {
+        runs++;
+        return new Promise<void>((resolve) => (release = resolve));
+    }, 1000, clock);
+
+    for (let i = 0; i < 5; i++) {
+        updater.poke();
+        clock.advance(900);
+    }
+    assert.equal(runs, 0, "every edit restarts the quiet period");
+    clock.advance(100);
+    assert.equal(runs, 1);
+
+    // An edit during the update: no second update at once, one after it.
+    updater.poke();
+    clock.advance(1000);
+    assert.equal(runs, 1, "never two at a time");
+    release();
+    await settle();
+    clock.advance(1000);
+    assert.equal(runs, 2, "the edit made during the update gets its own");
+    release();
+});
+
+/** A plugin-built index, the updater on a fake clock, and vault events wired. */
+async function autoHarness(options: { artifact: boolean } = { artifact: false }) {
+    const root = vaultCopy(options);
+    const harness = await load(root, options.artifact ? { dim: 4 } : {});
+    if (!options.artifact) {
+        await harness.plugin.buildIndex();
+    }
+    const clock = new FakeClock();
+    // Each update the clock starts, so a test can await exactly that one.
+    let last: Promise<void> = Promise.resolve();
+    harness.plugin.autoUpdater = new AutoUpdater(() => (last = harness.plugin.autoUpdate()), QUIET_MS, clock);
+    for (const ready of harness.app.workspace.layoutReady) ready();
+    // The startup check. Against the fixture's CLI index it finds changes,
+    // since that index carries placeholder hashes, so let it finish.
+    clock.advance(QUIET_MS);
+    await last;
+    harness.embedder.seen.length = 0;
+    notices.length = 0;
+    return { root, clock, harness, lastUpdate: () => last, ...harness };
+}
+
+function edit(root: string, app: App, path: string, text: string): void {
+    writeFileSync(join(root, path), text);
+    touch(root, path);
+    app.vault.emit("modify", { path });
+}
+
+test("an edited note is indexed once edits settle, with no prompt and no notice", async () => {
+    const { root, clock, harness, lastUpdate, plugin, app, embedder, replaces } = await autoHarness();
+    const consents = harness.consents;
+    // As after a restart: the model is loaded again, and loading reports
+    // progress even from the cache. An update nobody asked for shows none.
+    (plugin as never as { stopEmbedder(): void }).stopEmbedder();
+    plugin.embedderFactory = async (_model, _pooling, onProgress) => {
+        onProgress({ file: "model.onnx", loaded: 50, total: 100 });
+        return embedder;
+    };
+    edit(root, app, "notes/hydration.md", "# Hydration\n\nRewritten: water by mass.\n");
+    assert.equal(clock.pending, 1);
+    clock.advance(QUIET_MS - 1);
+    await settle();
+    assert.equal(embedder.seen.length, 0, "not before the quiet period ends");
+
+    clock.advance(1);
+    await lastUpdate();
+    assert.ok(embedder.seen.every((t) => t.includes("Rewritten")), JSON.stringify(embedder.seen));
+    const stale = (await plugin.vaultStaleness())!;
+    assert.deepEqual([stale.changed, stale.added, stale.removed], [[], [], []]);
+    assert.equal(replaces.length, 0);
+    assert.equal(harness.consents, consents, "the model is not asked about again");
+    assert.deepEqual(notices, [], "an update nobody asked for keeps quiet");
+    assert.equal(plugin.autoSkipped, null);
+});
+
+test("an index another device or the CLI wrote is never replaced automatically", async () => {
+    const { root, plugin, app, replaces } = await autoHarness({ artifact: true });
+    plugin.settings.semanticSearch = true;
+    const before = shardBytes(root);
+    edit(root, app, "notes/hydration.md", "# Hydration\n\nRewritten.\n");
+    await plugin.autoUpdate();
+    assert.equal(replaces.length, 0, "the replace prompt is never raised unasked");
+    assert.ok(shardBytes(root).equals(before), "the index is untouched");
+    assert.match(
+        plugin.autoSkipped ?? "",
+        /another device or the gnosis CLI wrote this index/,
+        JSON.stringify(plugin.diagnostics.recent()),
+    );
+});
+
+test("with semantic search off, nothing is downloaded or rebuilt unasked", async () => {
+    const { root, plugin, app, embedder } = await autoHarness();
+    plugin.settings.semanticSearch = false;
+    edit(root, app, "notes/hydration.md", "# Hydration\n\nRewritten.\n");
+    await plugin.autoUpdate();
+    assert.deepEqual(embedder.seen, []);
+    assert.match(plugin.autoSkipped ?? "", /semantic search is off/);
+
+    // Updating by hand settles it.
+    plugin.settings.semanticSearch = true;
+    await plugin.buildIndex();
+    assert.equal(plugin.autoSkipped, null);
+});
+
+test("nothing runs when the setting is off, on mobile, or with nothing changed", async () => {
+    const { root, plugin, app, embedder } = await autoHarness();
+    app.vault.adapter.writes.length = 0;
+    await plugin.autoUpdate();
+    assert.deepEqual(app.vault.adapter.writes, [], "an unchanged vault reads and writes nothing");
+
+    edit(root, app, "notes/hydration.md", "# Hydration\n\nRewritten.\n");
+    plugin.settings.autoUpdate = false;
+    await plugin.autoUpdate();
+    plugin.settings.autoUpdate = true;
+    plugin.isMobile = () => true;
+    await plugin.autoUpdate();
+    assert.deepEqual(embedder.seen, []);
+    assert.deepEqual(notices, [], "and says nothing about it");
+});
+
+test("only a note a build includes starts the quiet period", async () => {
+    const { clock, app } = await autoHarness();
+    app.vault.emit("modify", { path: "notes/loaf.png" });
+    app.vault.emit("create", { path: "gnosis-report.md" });
+    app.excluded.push("archive/");
+    app.vault.emit("modify", { path: "archive/old.md" });
+    assert.equal(clock.pending, 0);
+    app.vault.emit("rename", { path: "notes/renamed.md" }, "notes/sourdough.md");
+    assert.equal(clock.pending, 1);
 });
