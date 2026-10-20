@@ -50,6 +50,36 @@ export class Builder {
         }
     }
     /**
+     * Offer one image file to the index; needs `image` in the spec.
+     *
+     * `hash` is `contentHashBytes` of the file's bytes. A new image owes a
+     * vision-tower vector (`setImageVector`) and a title proxy
+     * (`setTitleVector`, with the `title` this returns).
+     * @param {string} path
+     * @param {string} hash
+     * @param {number} mtime_ms
+     * @returns {any}
+     */
+    addImage(path, hash, mtime_ms) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(hash, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.builder_addImage(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, mtime_ms);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * A builder with nothing to reuse: every document will be embedded.
      * @param {any} spec
      * @returns {Builder}
@@ -155,6 +185,72 @@ export class Builder {
             return r0 >>> 0;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Drop a document that was offered but cannot be completed, such as an
+     * image that will not decode; `gnosis index` skips those too. Returns
+     * whether it was there.
+     * @param {string} path
+     * @returns {boolean}
+     */
+    removeDocument(path) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.builder_removeDocument(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 !== 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Supply an image's vector, from CLIP's vision tower.
+     * @param {string} path
+     * @param {Float32Array} vector
+     */
+    setImageVector(path, vector) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.builder_setImageVector(retptr, this.__wbg_ptr, ptr0, len0, addBorrowedObject(vector));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            heap[stack_pointer++] = undefined;
+        }
+    }
+    /**
+     * Supply a document's title-proxy vector, from CLIP's text tower.
+     * @param {string} path
+     * @param {Float32Array} vector
+     */
+    setTitleVector(path, vector) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.builder_setTitleVector(retptr, this.__wbg_ptr, ptr0, len0, addBorrowedObject(vector));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            heap[stack_pointer++] = undefined;
         }
     }
     /**
@@ -496,6 +592,30 @@ export function contentHash(text) {
         wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
     }
 }
+
+/**
+ * The content hash `addImage` expects for an image file's bytes.
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+export function contentHashBytes(bytes) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.contentHashBytes(retptr, ptr0, len0);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        deferred2_0 = r0;
+        deferred2_1 = r1;
+        return getStringFromWasm0(r0, r1);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+    }
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -706,6 +826,13 @@ let heap_next = heap.length;
 
 function isLikeNone(x) {
     return x === undefined || x === null;
+}
+
+function passArray8ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passArrayJsValueToWasm0(array, malloc) {

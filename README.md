@@ -56,6 +56,16 @@ shows what comes back.
 - It reproduces the CLI's image scores to 2e-7 and ranks them identically
   (`test/image-parity.test.ts`).
 - *Delete model* removes CLIP too and turns this off; the model card counts it.
+- **Indexing images here.** With the switch on, *Build index* also embeds the
+  vault's PNG, JPEG and WebP files with CLIP's vision tower
+  (`Qdrant/clip-ViT-B-32-vision`, 352 MB) and gives every document a CLIP-text
+  title proxy, which is what `gnosis index` writes with `[embed.image]` on.
+  The one switch covers both towers: its prompt names the vision tower, which
+  is downloaded only when a build first needs to embed an image. An automatic
+  update never fetches it. A file that will not decode is skipped, as the CLI
+  skips it. Preprocessing follows fastembed (a squash to 224x224 with a
+  Catmull-Rom filter, alpha dropped), not transformers.js, which scores 0.69
+  against the CLI's vectors for a 16:9 photo where this scores above 0.9999.
 
 **Building the index here** (command: *Build index*), desktop only:
 
@@ -85,7 +95,8 @@ shows what comes back.
 
 - **Staleness reporting** — "built 3 days ago, 47 notes have changed since",
   and rebuilding automatically when notes change.
-- **Indexing images here, and PDFs**, which only the CLI does.
+- **PDFs**, which only the CLI indexes. Changes to images are not part of the
+  "notes changed" line on the index card; a build picks them up.
 
 ## Getting started
 
@@ -167,7 +178,17 @@ Three suites, each answering something the others cannot:
   must score every image as `gnosis search --in image` does, in the same
   order. Skipped unless pointed at a vault with images, indexed and exported
   with f32 vectors (`GNOSIS_PARITY_VAULT=/path/to/vault npm test`, `gnosis` on
-  the PATH, `GNOSIS_FASTEMBED_CACHE` to reuse the CLI's model cache).
+  the PATH, `GNOSIS_FASTEMBED_CACHE` to reuse the CLI's model cache). It also
+  checks the vision tower against the CLI's image vectors (every image must
+  find itself, above 0.999) and that an index built here with images has the
+  documents, chunks and spaces of the CLI's (`--quantize i8 --shard-docs 32
+  --out .gnosis/artifact-i8`), with image-query scores within i8 noise.
+- `test/images-build.test.ts` — building with images, both CLIP towers
+  replaced by stand-ins: the image space and title proxies, an undecodable file
+  skipped, an unchanged rebuild embedding nothing (and not loading the vision
+  tower), and an automatic update not fetching it.
+- `test/preprocess.test.ts` — the resize, crop-free squash and normalization
+  that make CLIP's input, without a model.
 - `test/real-vault.test.ts` — the same plugin against a real vault, skipped
   unless pointed at one: `GNOSIS_VAULT=/path/to/vault npm test`. It asserts the
   thing a fixture cannot — that every result resolves to a file that is

@@ -15,6 +15,12 @@ export interface Download {
     bytes: number;
     /** Set on the engine that runs the model on the graphics card. */
     gpu?: boolean;
+    /**
+     * Agreed to now but downloaded only when something needs it — the vision
+     * tower, on the first index build with images — so it is named, and left
+     * out of what is downloaded straight away.
+     */
+    later?: boolean;
 }
 
 /** The downloads semantic search needs for `model`, on `device`. */
@@ -51,11 +57,19 @@ export function megabytes(bytes: number): string {
 
 /** The prompt's text, separate from the modal so it can be tested. */
 export function consentLines(downloads: Download[]): string[] {
-    const total = downloads.reduce((sum, d) => sum + d.bytes, 0);
+    const now = downloads.filter((d) => !d.later);
+    const later = downloads.filter((d) => d.later);
+    const total = now.reduce((sum, d) => sum + d.bytes, 0);
     return [
         `Gnosis embeds your notes and your queries with this model, here, on this device. ` +
             `Using it downloads, once (${megabytes(total)} in all):`,
-        ...downloads.map((d) => `• ${d.what} — ${megabytes(d.bytes)} from ${d.from}`),
+        ...now.map((d) => `• ${d.what} — ${megabytes(d.bytes)} from ${d.from}`),
+        ...(later.length === 0
+            ? []
+            : [
+                  "Also covered by agreeing, downloaded only when you first build an index with images:",
+                  ...later.map((d) => `• ${d.what} — ${megabytes(d.bytes)} from ${d.from}`),
+              ]),
         "Both are cached, so nothing is downloaded again. Your notes and your queries never " +
             "leave this device: nothing is uploaded, and the model runs locally.",
         ...(downloads.some((d) => d.gpu)

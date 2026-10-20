@@ -22,8 +22,9 @@
 //!   checkpoints, and returns. The live index is not touched — writing it is
 //!   the caller's step, after a build that completed.
 
-import { Builder } from "../../vendor/gnosis-wasm/gnosis_wasm.js";
+import { Builder, contentHashBytes } from "../../vendor/gnosis-wasm/gnosis_wasm.js";
 import type { RawArtifact } from "../artifact.js";
+import type { ImageVectors } from "../embedder.js";
 
 /** What `Builder.create` takes, as the plugin fills it in. */
 export interface BuildSpec {
@@ -38,6 +39,20 @@ export interface BuildSpec {
     compression?: "none" | "deflate";
     /** Notes per shard; gnosis's default, the CLI's, is 256. */
     shardDocs?: number;
+    /**
+     * Build the image space too: images become documents and every document
+     * gets a title proxy, as `gnosis index` does with `[embed.image]` on.
+     */
+    image?: ImageSpec;
+}
+
+/** The image space a build records: CLIP's two towers, which share an id. */
+export interface ImageSpec {
+    /** The vision model's id, as the manifest will record the space's model. */
+    model: string;
+    /** The text tower's id: what queries the space and embeds the title proxies. */
+    queryId: string;
+    dim: number;
 }
 
 /** One note, read lazily: most notes in an incremental build are reused. */
@@ -48,9 +63,19 @@ export interface Note {
     read(): Promise<string>;
 }
 
+/** One image file, read lazily: most of an incremental build is reused. */
+export interface ImageFile {
+    path: string;
+    /** Milliseconds, as Obsidian reports it. */
+    mtime: number;
+    read(): Promise<Uint8Array>;
+}
+
 export interface BuildProgress {
     notesDone: number;
     notesTotal: number;
+    imagesDone: number;
+    imagesTotal: number;
     /** Chunks embedded in this run — the slow part, and what the estimate uses. */
     chunksEmbedded: number;
     notesReused: number;
@@ -60,10 +85,16 @@ export interface BuildProgress {
 export interface BuildInput {
     spec: BuildSpec;
     notes: Note[];
+    /** Image files, when the spec has an image space. */
+    images?: ImageFile[];
     /** What to start from: a checkpoint, the live artifact, or nothing. */
     base: RawArtifact | null;
     /** Unit vectors for exactly these strings, in order. */
     embed(texts: string[]): Promise<Float32Array[]>;
+    /** Vision-tower vectors for image files, with the ones that would not decode. */
+    embedImages?(images: Uint8Array[]): Promise<ImageVectors>;
+    /** CLIP text-tower vectors for titles: every document's title proxy. */
+    embedTitles?(titles: string[]): Promise<Float32Array[]>;
     /** Keep a complete artifact of what is done so far. */
     checkpoint(artifact: RawArtifact): Promise<void>;
     signal: AbortSignal;
@@ -76,6 +107,15 @@ export interface BuildInput {
     checkpointEveryMs?: number;
     /** Chunks per model call: the CLI's own `batch_size`. */
     batchChunks?: number;
+    /** Images per vision call, and titles per text-tower call. */
+    imageBatch?: number;
+    titleBatch?: number;
+}
+
+/** A file the build left out because it would not decode. */
+export interface SkippedFile {
+    path: string;
+    message: string;
 }
 
 export interface BuildResult {
@@ -88,6 +128,11 @@ export interface BuildResult {
     chunks: number;
     chunksEmbedded: number;
     notesReused: number;
+    /** Images embedded in this run, and carried over unchanged. */
+    imagesEmbedded: number;
+    imagesReused: number;
+    /** Images that would not decode and are not in the index, as `gnosis index` skips them. */
+    skipped: SkippedFile[];
     /** True if the signal stopped it; `artifact` is then a checkpoint, not a build. */
     canceled: boolean;
 }
@@ -135,12 +180,22 @@ function open(spec: BuildSpec, base: RawArtifact | null): Builder {
 export async function runBuild(input: BuildInput): Promise<BuildResult> {
     const every = input.checkpointEveryMs ?? 60_000;
     const batchChunks = input.batchChunks ?? 16;
+    const imageBatch = input.imageBatch ?? 8;
+    const titleBatch = input.titleBatch ?? 32;
     const started = input.now();
     // Sorted so a resumed build walks the vault in the same order, which keeps
     // its progress report meaningful. The artifact itself does not depend on it.
-    const notes = [...input.notes].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    const byPath = <T extends { path: string }>(a: T, b: T) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+    const notes = [...input.notes].sort(byPath);
+    const images = input.spec.image === undefined ? [] : [...(input.images ?? [])].sort(byPath);
     if (notes.length === 0) {
         throw new Error("the vault has no notes to index");
+    }
+    if (input.spec.image !== undefined && input.embedTitles === undefined) {
+        throw new Error("a build with an image space needs the text tower to embed titles with");
+    }
+    if (images.length > 0 && input.embedImages === undefined) {
+        throw new Error("a build with images needs the vision tower to embed them with");
     }
 
     let base = input.base;
@@ -148,23 +203,34 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
     let lastCheckpoint = started;
     let chunksEmbedded = 0;
     let notesReused = 0;
+    let imagesEmbedded = 0;
+    let imagesReused = 0;
     let done = 0;
-    /** Notes already in the builder, which a checkpoint has to re-add. */
+    let imagesDone = 0;
+    /** Notes and images already in the builder, which a checkpoint has to re-add. */
     let added: Note[] = [];
+    let addedImages: ImageFile[] = [];
     let queue: Queued[] = [];
     let queuedChunks = 0;
+    /** Images waiting for the vision tower, with their bytes. */
+    let imageQueue: { file: ImageFile; bytes: Uint8Array }[] = [];
+    /** Documents waiting for a title-proxy vector. */
+    let titles: { path: string; title: string }[] = [];
+    const skipped: SkippedFile[] = [];
 
     const report = () =>
         input.onProgress({
             notesDone: done,
             notesTotal: notes.length,
+            imagesDone,
+            imagesTotal: images.length,
             chunksEmbedded,
             notesReused,
             elapsedMs: input.now() - started,
         });
 
-    /** Embed everything queued, in model-sized calls, and hand the vectors over. */
-    const flush = async () => {
+    /** Embed the queued notes' chunks, in model-sized calls, and hand the vectors over. */
+    const flushText = async () => {
         while (queue.length > 0) {
             // Whole notes per call, up to the batch size — a note's vectors go
             // to the builder in one piece, so it is never half-supplied.
@@ -196,6 +262,49 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
         queuedChunks = 0;
     };
 
+    /** Embed the queued images; one that will not decode is dropped, as the CLI skips it. */
+    const flushImages = async () => {
+        while (imageQueue.length > 0) {
+            const batch = imageQueue.splice(0, imageBatch);
+            const { vectors, failed } = await input.embedImages!(batch.map((b) => b.bytes));
+            batch.forEach(({ file }, i) => {
+                const message = failed.get(i);
+                if (message === undefined) {
+                    builder!.setImageVector(file.path, vectors[i]!);
+                    imagesEmbedded++;
+                } else {
+                    builder!.removeDocument(file.path);
+                    skipped.push({ path: file.path, message });
+                    addedImages = addedImages.filter((a) => a.path !== file.path);
+                    titles = titles.filter((t) => t.path !== file.path);
+                }
+                imagesDone++;
+            });
+            report();
+            await input.yieldToUi();
+        }
+    };
+
+    /** Embed the queued titles with the text tower: every document's proxy. */
+    const flushTitles = async () => {
+        while (titles.length > 0) {
+            const batch = titles.splice(0, titleBatch);
+            const vectors = await input.embedTitles!(batch.map((t) => t.title));
+            batch.forEach(({ path }, i) => builder!.setTitleVector(path, vectors[i]!));
+            await input.yieldToUi();
+        }
+    };
+
+    /** Everything queued, so that no document is waiting for vectors. */
+    const flush = async () => {
+        await flushText();
+        await flushImages();
+        await flushTitles();
+    };
+
+    /** Whether enough is queued for a call to be worth making. */
+    const full = () => queuedChunks >= batchChunks || imageQueue.length >= imageBatch || titles.length >= titleBatch;
+
     /** Finish the builder into a complete artifact. It is consumed and freed. */
     const finishBuilder = (): { artifact: RawArtifact; documents: number; chunks: number } => {
         const finished = builder!.finish(Date.now() / 1000) as Finished;
@@ -207,8 +316,9 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
     /**
      * Keep a complete artifact of everything so far, and carry on from it.
      *
-     * The next builder starts from the checkpoint and has every note done so
-     * far re-added — a read and a hash per note, since each comes back reused.
+     * The next builder starts from the checkpoint and has every note and image
+     * done so far re-added — a read and a hash each, since each comes back
+     * reused.
      */
     const checkpointAndContinue = async () => {
         const { artifact } = finishBuilder();
@@ -223,7 +333,21 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
                 throw new Error(`${note.path} changed during the build — run it again`);
             }
         }
+        for (const image of addedImages) {
+            const hash = contentHashBytes(await image.read());
+            const again = builder.addImage(image.path, hash, image.mtime) as { reused: boolean };
+            if (!again.reused) {
+                throw new Error(`${image.path} changed during the build — run it again`);
+            }
+        }
         lastCheckpoint = input.now();
+    };
+
+    /** Checkpoint if it is time, after a flush has left nothing waiting. */
+    const maybeCheckpoint = async () => {
+        if (input.now() - lastCheckpoint >= every && !input.signal.aborted) {
+            await checkpointAndContinue();
+        }
     };
 
     try {
@@ -234,8 +358,14 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
             const result = builder!.addDocument(note.path, await note.read(), note.mtime) as {
                 reused: boolean;
                 texts: string[];
+                title?: string;
             };
             added.push(note);
+            // Owed even to a reused note, when the index it came from had no
+            // image space and so no proxies.
+            if (result.title !== undefined) {
+                titles.push({ path: note.path, title: result.title });
+            }
             if (result.reused) {
                 notesReused++;
                 done++;
@@ -243,36 +373,78 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
                     report();
                     await input.yieldToUi();
                 }
+                if (full()) {
+                    await flush();
+                    await maybeCheckpoint();
+                }
                 continue;
             }
             queue.push({ path: note.path, texts: result.texts });
             queuedChunks += result.texts.length;
-            if (queuedChunks >= batchChunks) {
+            if (full()) {
                 await flush();
-                if (input.now() - lastCheckpoint >= every && !input.signal.aborted) {
-                    await checkpointAndContinue();
-                }
+                await maybeCheckpoint();
+            }
+        }
+        for (const image of images) {
+            if (input.signal.aborted) {
+                break;
+            }
+            const bytes = await image.read();
+            const result = builder!.addImage(image.path, contentHashBytes(bytes), image.mtime) as {
+                reused: boolean;
+                title?: string;
+            };
+            addedImages.push(image);
+            if (result.title !== undefined) {
+                titles.push({ path: image.path, title: result.title });
+            }
+            if (result.reused) {
+                imagesReused++;
+                imagesDone++;
+            } else {
+                imageQueue.push({ file: image, bytes });
+            }
+            if (full()) {
+                await flush();
+                await maybeCheckpoint();
+            } else if (result.reused && imagesReused % 200 === 0) {
+                report();
+                await input.yieldToUi();
             }
         }
         // Canceled or not, what is queued is finished: it is at most one
-        // batch, and a builder with notes still waiting for vectors cannot be
-        // finished at all.
+        // batch, and a builder with documents still waiting for vectors cannot
+        // be finished at all.
         await flush();
         report();
 
         const canceled = input.signal.aborted;
-        if (canceled && added.length === 0) {
-            // Stopped before the first note: nothing new to keep.
-            return { artifact: null, documents: 0, chunks: 0, chunksEmbedded, notesReused, canceled };
+        if (canceled && added.length + addedImages.length === 0) {
+            // Stopped before the first document: nothing new to keep.
+            return {
+                artifact: null,
+                documents: 0,
+                chunks: 0,
+                chunksEmbedded,
+                notesReused,
+                imagesEmbedded,
+                imagesReused,
+                skipped,
+                canceled,
+            };
         }
         const { artifact, documents, chunks } = finishBuilder();
         if (canceled) {
             await input.checkpoint(artifact);
         }
-        return { artifact, documents, chunks, chunksEmbedded, notesReused, canceled };
+        return { artifact, documents, chunks, chunksEmbedded, notesReused, imagesEmbedded, imagesReused, skipped, canceled };
     } finally {
         added = [];
+        addedImages = [];
         queue = [];
+        imageQueue = [];
+        titles = [];
         builder?.free();
     }
 }

@@ -33,6 +33,8 @@ await esbuild.build({
         "test/build.test.ts",
         "test/parity.test.ts",
         "test/image-parity.test.ts",
+        "test/preprocess.test.ts",
+        "test/images-build.test.ts",
         "test/real-vault.test.ts",
         "test/layout.test.ts",
         "test/diagnostics.test.ts",

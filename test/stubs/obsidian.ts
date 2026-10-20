@@ -104,8 +104,22 @@ class StubVault {
         return basename(this.root);
     }
 
+    /** Every file outside dot-folders, as Obsidian's own index has them. */
+    getFiles(): TFile[] {
+        return this.filesWhere(() => true);
+    }
+
+    async readBinary(file: TFile): Promise<ArrayBuffer> {
+        const bytes = await readFile(join(this.root, file.path));
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    }
+
     /** Markdown files outside dot-folders, as Obsidian's own index has them. */
     getMarkdownFiles(): TFile[] {
+        return this.filesWhere((name) => name.endsWith(".md"));
+    }
+
+    private filesWhere(wanted: (name: string) => boolean): TFile[] {
         const found: TFile[] = [];
         const walk = (dir: string) => {
             for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -115,7 +129,7 @@ class StubVault {
                 const full = join(dir, entry.name);
                 if (entry.isDirectory()) {
                     walk(full);
-                } else if (entry.name.endsWith(".md")) {
+                } else if (wanted(entry.name)) {
                     found.push(this.getFileByPath(relative(this.root, full).split("\\").join("/"))!);
                 }
             }
