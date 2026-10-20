@@ -156,3 +156,34 @@ export function statusLine(progress: BuildProgress): string {
         ` · ${progress.chunksEmbedded.toLocaleString()} chunks embedded${estimate(progress)}`
     );
 }
+
+/**
+ * What to tell the reader before an index is rebuilt from nothing.
+ *
+ * `format` is set when the index is in a format this version cannot read, which
+ * is why it cannot be updated in place; otherwise the reader asked. Either way
+ * every note is embedded again, which is the cost worth saying. When another
+ * writer made the index, what replacing it drops comes first.
+ */
+export function rebuildWarning(
+    manifestJson: string,
+    vaultName: string,
+    format: { found: number; supported: number } | null,
+    writtenElsewhere: boolean,
+): string[] {
+    const lines =
+        format === null
+            ? ["This builds the index again from nothing, instead of carrying over unchanged notes."]
+            : [
+                  `This index is in format v${format.found}, and this version reads v${format.supported}, ` +
+                      "so it cannot be updated in place.",
+              ];
+    lines.push(
+        "Every note is embedded again, which takes as long as the first build. The existing index " +
+            "stays in use until the new one is written, and keeps its model and settings.",
+    );
+    if (writtenElsewhere) {
+        lines.push(...replaceWarning(manifestJson, vaultName));
+    }
+    return lines;
+}

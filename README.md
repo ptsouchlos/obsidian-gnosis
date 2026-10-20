@@ -57,6 +57,10 @@ shows what comes back.
   IndexedDB — never the vault, so a half-built index never syncs anywhere.
   *Cancel index build*, or closing Obsidian, keeps the existing index
   untouched; the next *Build index* picks up where it stopped.
+- **Rebuild from scratch** (command: *Rebuild index from scratch*): embeds every
+  note again instead of carrying unchanged ones over, after asking. An index in
+  an older artifact format cannot be updated in place, so *Build index* offers
+  the same rebuild for it; an automatic update leaves it alone.
 - An existing index keeps its own model and settings. A vault with none is
   built with *Model for new indexes* (bge-small-en-v1.5 by default).
 - **Two writers**: if the index in the vault was written by another device or

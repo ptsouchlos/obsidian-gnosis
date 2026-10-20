@@ -21,6 +21,8 @@ import {
     ArtifactMissing,
     MANIFEST_NAME,
     join,
+    olderFormat,
+    olderFormatMessage,
     openArtifact,
     parseManifest,
     readArtifact,
@@ -29,7 +31,7 @@ import {
 } from "./artifact.js";
 import { IndexedDbCheckpoints, type CheckpointStore } from "./build/checkpoints.js";
 import { runBuild, type BuildProgress, type BuildResult, type BuildSpec, type Note } from "./build/job.js";
-import { replaceWarning, specForNewIndex, specFromManifest, statusLine } from "./build/plan.js";
+import { rebuildWarning, replaceWarning, specForNewIndex, specFromManifest, statusLine } from "./build/plan.js";
 import { copyArtifact, manifestHash, removeArtifact, writeArtifact } from "./build/write.js";
 import { askConsent, confirm, downloadsFor, megabytes, type Download } from "./consent.js";
 import {
@@ -91,6 +93,9 @@ export default class GnosisPlugin extends Plugin {
     /** Asked before replacing an index this device did not write. */
     confirmReplace: (lines: string[]) => Promise<boolean> = (lines) =>
         confirm(this.app, "Replace the existing index?", lines, "Build and replace");
+    /** Asked before an index is rebuilt from nothing, which embeds every note again. */
+    confirmRebuild: (lines: string[]) => Promise<boolean> = (lines) =>
+        confirm(this.app, "Rebuild the index from scratch?", lines, "Rebuild");
     /** Where an unfinished build keeps its progress; per device, never synced. */
     checkpoints: CheckpointStore = new IndexedDbCheckpoints();
     checkpointEveryMs = 60_000;
@@ -182,6 +187,14 @@ export default class GnosisPlugin extends Plugin {
             name: "Build index",
             callback: () => {
                 void this.buildIndex();
+            },
+        });
+
+        this.addCommand({
+            id: "rebuild-index",
+            name: "Rebuild index from scratch",
+            callback: () => {
+                void this.buildIndex(false, true);
             },
         });
 
@@ -327,8 +340,15 @@ export default class GnosisPlugin extends Plugin {
         if (this.index === null) {
             return;
         }
-        const base = this.index.searchConfig() as { dense_weight: number; title_boost: number };
-        this.index.setSearchConfig(withPresets(base, this.settings.strategy, this.settings.titleBonus));
+        const base = this.index.searchConfig() as {
+            dense_weight: number;
+            title_boost: number;
+            recency_weight: number;
+            recency_half_life_days: number;
+        };
+        this.index.setSearchConfig(
+            withPresets(base, this.settings.strategy, this.settings.titleBonus, this.settings.recency, Date.now()),
+        );
     }
 
     /** How pickers show and open results, as the settings say now. */
@@ -730,7 +750,7 @@ export default class GnosisPlugin extends Plugin {
      * completed, and only after the reader has agreed if another device or
      * the CLI wrote it.
      */
-    async buildIndex(auto = false): Promise<void> {
+    async buildIndex(auto = false, fresh = false): Promise<void> {
         if (this.building !== null) {
             if (!auto) {
                 new Notice("Gnosis: an index build is already running");
@@ -751,7 +771,7 @@ export default class GnosisPlugin extends Plugin {
         const startedAt = this.diagnostics.now();
         let run: BuildRun = { outcome: "not started" };
         try {
-            run = await this.runBuildCommand(controller.signal, auto);
+            run = await this.runBuildCommand(controller.signal, auto, fresh);
         } catch (error) {
             run = { outcome: "failed", error: describe(error) };
             new Notice(`Gnosis: the index build failed — ${describe(error)}. The existing index is unchanged.`, 10_000);
@@ -808,6 +828,10 @@ export default class GnosisPlugin extends Plugin {
             if (await this.app.vault.adapter.exists(manifestPath)) {
                 manifestJson = await this.app.vault.adapter.read(manifestPath);
                 parseManifest(manifestJson, manifestPath);
+                const format = await olderFormat(manifestJson);
+                if (format !== null) {
+                    readError = olderFormatMessage(format);
+                }
             }
         } catch (error) {
             readError = describe(error);
@@ -863,8 +887,12 @@ export default class GnosisPlugin extends Plugin {
      * One build. `auto` is an update nobody asked for: it never prompts, so
      * each question a build would ask becomes a reason it was skipped, and it
      * keeps quiet when it succeeds. A failure or a cancel still says so.
+     *
+     * `fresh` is a rebuild the reader asked for: nothing is carried over from
+     * the existing index, so every note is embedded again. An index in another
+     * format is rebuilt the same way, since the builder cannot read it.
      */
-    private async runBuildCommand(signal: AbortSignal, auto: boolean): Promise<BuildRun> {
+    private async runBuildCommand(signal: AbortSignal, auto: boolean, fresh: boolean): Promise<BuildRun> {
         const dir = this.settings.artifactDir;
         const vaultName = this.app.vault.getName();
 
@@ -872,10 +900,13 @@ export default class GnosisPlugin extends Plugin {
         try {
             live = await readArtifact(this.app, dir);
         } catch (error) {
-            if (!(error instanceof ArtifactMissing)) {
+            // A fresh build replaces whatever is there, so an index that will
+            // not even read is no reason to refuse it.
+            if (!(error instanceof ArtifactMissing) && !fresh) {
                 throw error;
             }
         }
+        const format = live === null ? null : await olderFormat(live.manifestJson);
 
         const liveHash = live === null ? null : await manifestHash(live.manifestJson);
         const planned = live === null
@@ -890,7 +921,16 @@ export default class GnosisPlugin extends Plugin {
         }
         const spec = planned.spec;
 
-        if (live !== null && liveHash !== this.lastWritten()) {
+        const rebuilding = live !== null && (fresh || format !== null);
+        if (live !== null && rebuilding) {
+            if (auto) {
+                return { outcome: "not started", skipped: SKIP_OLD_FORMAT };
+            }
+            const lines = rebuildWarning(live.manifestJson, vaultName, format, liveHash !== this.lastWritten());
+            if (!(await this.confirmRebuild(lines))) {
+                return { outcome: "not started" };
+            }
+        } else if (live !== null && liveHash !== this.lastWritten()) {
             if (auto) {
                 return { outcome: "not started", skipped: SKIP_WRITTEN_ELSEWHERE };
             }
@@ -919,7 +959,8 @@ export default class GnosisPlugin extends Plugin {
         const vault = this.vaultKey();
         const specKey = JSON.stringify(spec);
         const saved = await this.checkpoints.load(vault);
-        const resuming = saved !== null && saved.specKey === specKey;
+        // A build asked to start over does not pick up an old one's progress.
+        const resuming = saved !== null && saved.specKey === specKey && !fresh;
         if (saved !== null && !resuming) {
             await this.checkpoints.clear(vault);
         }
@@ -932,7 +973,7 @@ export default class GnosisPlugin extends Plugin {
         const result = await runBuild({
             spec,
             notes: this.notes(),
-            base: resuming ? saved.artifact : live,
+            base: resuming ? saved.artifact : rebuilding ? null : live,
             embed: (texts) => embedder.embed(texts),
             checkpoint: (artifact) => this.checkpoints.save(vault, { specKey, artifact, savedAt: Date.now() }),
             signal,
@@ -1227,6 +1268,8 @@ const STARTUP_DELAY_MS = 30_000;
 /** Why an automatic update was skipped; the card shows these as they are. */
 const SKIP_WRITTEN_ELSEWHERE =
     "Not updated automatically: another device or the gnosis CLI wrote this index. Update it here to take it over.";
+const SKIP_OLD_FORMAT =
+    "Not updated automatically: this index is in an older format. Rebuild it to read it again.";
 const SKIP_NO_MODEL = "Not updated automatically: semantic search is off, so the model is not loaded.";
 
 function platformName(): string {

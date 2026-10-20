@@ -43,15 +43,16 @@ const two = (x: number) => x.toFixed(2);
  * What a hit's score is made of, in one line.
  *
  * With meaning in the blend: "Match 83% · meaning 0.65 · keywords 0.08 ·
- * title +0.10", the parts adding up to the match. Keywords alone are a
+ * title +0.10", the parts adding up to the match. A note lifted for being
+ * recent also says "recent +0.04". Keywords alone are a
  * different scale: the blend still weighs them by their share (0.1 at
  * Balanced), so a perfect keyword match would read "Match 3%". There,
  * `keywordShare` undoes the weight and the line says how well the keywords
  * matched against their own ceiling.
  */
 export function scoreLine(hit: Hit, keywordShare: number | null): string {
-    const { meaning, keywords, title } = hit.parts;
-    const bonus = `title +${two(title)}`;
+    const { meaning, keywords, title, recency } = hit.parts;
+    const bonus = `title +${two(title)}` + (recency > 0 ? ` · recent +${two(recency)}` : "");
     if (keywordShare !== null && keywordShare > 0) {
         return `Keywords ${percent(keywords / keywordShare)} · ${bonus}`;
     }

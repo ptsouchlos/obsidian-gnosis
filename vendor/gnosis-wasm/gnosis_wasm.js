@@ -458,6 +458,19 @@ export class Index {
 if (Symbol.dispose) Index.prototype[Symbol.dispose] = Index.prototype.free;
 
 /**
+ * The artifact format version this build reads and writes.
+ *
+ * A client compares it with a manifest's `format_version` to tell an index it
+ * must rebuild from one it can open, rather than finding out from the error
+ * that opening raises.
+ * @returns {number}
+ */
+export function artifactFormatVersion() {
+    const ret = wasm.artifactFormatVersion();
+    return ret >>> 0;
+}
+
+/**
  * The content hash `addDocument` records for `text`, for `Index.staleness`.
  *
  * A client that sends a hash gets an exact answer, where an mtime moves

@@ -85,7 +85,7 @@ const aNotice = () => waitFor("a notice", () => notices.length > 0);
 test("the plugin registers its commands", async () => {
     const { plugin } = await load();
     const ids = [...(plugin as never as { commands: Map<string, unknown> }).commands.keys()];
-    assert.deepEqual(ids.sort(), ["build-index", "cancel-build", "index-info", "related", "search"]);
+    assert.deepEqual(ids.sort(), ["build-index", "cancel-build", "index-info", "rebuild-index", "related", "search"]);
 });
 
 test("the index describes itself from the artifact in the vault", async () => {
@@ -132,6 +132,29 @@ test("a ranking preset changes the next search, with no reload", async () => {
     plugin.settings.titleBonus = "default";
     plugin.applySearchConfig();
     assert.equal(score(), withBonus, "and back");
+});
+
+test("recency lifts a note by its created date, and says so in its score parts", async () => {
+    const { plugin } = await load();
+    run(plugin, "search");
+    await aModal();
+    const modal = openedModals.at(-1)!;
+    const hit = (path: string) => (modal.type("sourdough hydration") as Hit[]).find((h) => h.path === path)!;
+
+    const off = hit("notes/hydration.md");
+    assert.equal(off.parts.recency, 0, "off by default");
+
+    plugin.settings.recency = "on";
+    plugin.applySearchConfig();
+    const hydration = hit("notes/hydration.md");
+    assert.ok(hydration.parts.recency > 0, `hydration is dated 2025: ${JSON.stringify(hydration.parts)}`);
+    assert.ok(Math.abs(hydration.score - off.score - hydration.parts.recency) < 1e-6, "added to the score");
+    const sourdough = hit("notes/sourdough.md");
+    assert.ok(sourdough.parts.recency < hydration.parts.recency, "sourdough is dated 2020");
+
+    plugin.settings.recency = "off";
+    plugin.applySearchConfig();
+    assert.equal(hit("notes/hydration.md").score, off.score, "and back");
 });
 
 test("choosing a result opens that note", async () => {
@@ -225,6 +248,8 @@ test("the score line says what a score is made of", () => {
     const keywords = { score: 0.032, parts: { meaning: 0, keywords: 0.032, title: 0 } } as Hit;
     assert.equal(scoreLine(keywords, 0.1), "Keywords 32% · title +0.00");
     // The bonus can lift a score past 1; a percentage cannot pass 100.
+    const recent = { score: 0.9, parts: { meaning: 0.7, keywords: 0.05, title: 0.1, recency: 0.05 } } as Hit;
+    assert.equal(scoreLine(recent, null), "Match 90% · meaning 0.70 · keywords 0.05 · title +0.10 · recent +0.05");
     assert.match(scoreLine({ score: 1.05, parts: { meaning: 0.9, keywords: 0.05, title: 0.1 } } as Hit, null), /^Match 100%/);
 });
 

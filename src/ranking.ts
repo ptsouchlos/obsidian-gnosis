@@ -8,6 +8,7 @@
 
 export type Strategy = "balanced" | "keyword";
 export type TitleBonus = "off" | "default";
+export type Recency = "off" | "on";
 
 /** `dense_weight`: how much of the fused score comes from meaning. */
 export const DENSE_WEIGHT: Readonly<Record<Strategy, number>> = {
@@ -30,10 +31,26 @@ export const TITLE_BOOST: Readonly<Record<TitleBonus, number>> = {
     default: 0.1,
 };
 
+/**
+ * `recency_weight` and `recency_half_life_days`: a bonus for a recently written
+ * note, halving every year, for notes that carry a frontmatter `created` date.
+ */
+export const RECENCY: Readonly<Record<Recency, { weight: number; halfLifeDays: number }>> = {
+    off: { weight: 0, halfLifeDays: 365 },
+    // Measured on gnosis's `data/recency_vault` (see the workspace's
+    // `docs/gnosis/recency-bonus.md`): "what was I reading about X" queries,
+    // nDCG@10 0.56 -> 0.92, at 0.04 on reference lookups where the old note is the
+    // answer. A synthetic vault, so a starting value rather than a tuned one.
+    on: { weight: 0.1, halfLifeDays: 365 },
+};
+
 /** The fields of gnosis's `SearchConfig` the presets set. */
 interface SearchConfig {
     dense_weight: number;
     title_boost: number;
+    recency_weight: number;
+    recency_half_life_days: number;
+    now_unix?: number;
 }
 
 /**
@@ -42,6 +59,20 @@ interface SearchConfig {
  * Everything else — BM25's parameters, whether the lexical channel runs —
  * stays as gnosis set it.
  */
-export function withPresets<T extends SearchConfig>(base: T, strategy: Strategy, titleBonus: TitleBonus): T {
-    return { ...base, dense_weight: DENSE_WEIGHT[strategy], title_boost: TITLE_BOOST[titleBonus] };
+export function withPresets<T extends SearchConfig>(
+    base: T,
+    strategy: Strategy,
+    titleBonus: TitleBonus,
+    recency: Recency,
+    nowMs: number,
+): T {
+    return {
+        ...base,
+        dense_weight: DENSE_WEIGHT[strategy],
+        title_boost: TITLE_BOOST[titleBonus],
+        recency_weight: RECENCY[recency].weight,
+        recency_half_life_days: RECENCY[recency].halfLifeDays,
+        // The query client has no clock; ages are measured from here.
+        now_unix: Math.floor(nowMs / 1000),
+    };
 }

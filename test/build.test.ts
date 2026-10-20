@@ -90,13 +90,14 @@ interface Harness {
     checkpoints: MemoryCheckpoints;
     consents: number;
     replaces: string[][];
+    rebuilds: string[][];
     /** The device each embedder start asked for. */
     devices: string[];
 }
 
 async function load(
     root: string,
-    options: { dim?: number; replace?: boolean; gpu?: boolean } = {},
+    options: { dim?: number; replace?: boolean; rebuild?: boolean; gpu?: boolean } = {},
 ): Promise<Harness> {
     notices.length = 0;
     const app = new App(root);
@@ -104,7 +105,7 @@ async function load(
     await plugin.onload();
     const embedder = new HashEmbedder(options.dim ?? 384);
     const checkpoints = new MemoryCheckpoints();
-    const harness: Harness = { plugin, app, embedder, checkpoints, consents: 0, replaces: [], devices: [] };
+    const harness: Harness = { plugin, app, embedder, checkpoints, consents: 0, replaces: [], rebuilds: [], devices: [] };
     plugin.hasWebgpu = async () => options.gpu ?? false;
     plugin.modelStore = new MemoryModelStore();
     plugin.embedderFactory = async (_model, _pooling, _progress, device) => {
@@ -119,6 +120,10 @@ async function load(
     plugin.confirmReplace = async (lines) => {
         harness.replaces.push(lines);
         return options.replace ?? true;
+    };
+    plugin.confirmRebuild = async (lines) => {
+        harness.rebuilds.push(lines);
+        return options.rebuild ?? true;
     };
     return harness;
 }
@@ -265,6 +270,75 @@ test("an index another device or the CLI wrote is replaced only if the reader ag
     again.app.local.set(...([...agreed.app.local][0]!));
     await again.plugin.buildIndex();
     assert.equal(again.replaces.length, 0);
+});
+
+/** The fixture's artifact, rewritten as an earlier format version would have written it. */
+function inOlderFormat(root: string, version: number): void {
+    const path = join(root, ARTIFACT, "manifest.json");
+    const manifest = JSON.parse(readFileSync(path, "utf8")) as { format_version: number };
+    manifest.format_version = version;
+    writeFileSync(path, JSON.stringify(manifest, null, 2));
+}
+
+test("an index in an older format is rebuilt from scratch, after asking", async () => {
+    const root = vaultCopy({ artifact: true });
+    inOlderFormat(root, 5);
+    const before = shardBytes(root);
+
+    // The card and a search say what is wrong, and what to do.
+    const probe = await load(root, { dim: 4 });
+    const status = await probe.plugin.indexStatus();
+    assert.match(JSON.stringify(status), /format v5.*reads v6.*Rebuild index/);
+    await assert.rejects(openArtifact(probe.app as never, ARTIFACT), /format v5.*Rebuild index/);
+
+    // An automatic update does not start a full re-embed unasked.
+    await probe.plugin.buildIndex(true);
+    assert.match(probe.plugin.autoSkipped ?? "", /older format/);
+    assert.deepEqual(probe.embedder.seen, []);
+
+    // Declined: nothing is embedded or written.
+    const declined = await load(root, { dim: 4, rebuild: false });
+    await declined.plugin.buildIndex();
+    assert.equal(declined.rebuilds.length, 1);
+    assert.match(declined.rebuilds[0]!.join(" "), /format v5.*reads v6/);
+    assert.deepEqual(declined.embedder.seen, []);
+    assert.ok(shardBytes(root).equals(before));
+
+    // Agreed: the index opens, in the existing index's own model and dimension.
+    const agreed = await load(root, { dim: 4 });
+    await agreed.plugin.buildIndex();
+    assert.equal(agreed.replaces.length, 0, "one question, not two");
+    assert.ok(agreed.embedder.seen.length >= 2, "every note is embedded again");
+    const rebuilt = await info(root);
+    assert.equal(rebuilt.formatVersion, 6);
+    assert.equal(rebuilt.documents, 2);
+    assert.equal(rebuilt.spaces[0]!.dim, 4);
+});
+
+test("Rebuild index from scratch embeds every note again, and a canceled ask changes nothing", async () => {
+    const root = vaultCopy({ artifact: false });
+    const first = await load(root);
+    await first.plugin.buildIndex();
+    const built = first.embedder.seen.length;
+    assert.ok(built >= 2);
+    assert.equal(first.rebuilds.length, 0, "a first build has nothing to rebuild");
+
+    // An ordinary build of an unchanged vault embeds nothing…
+    await first.plugin.buildIndex();
+    assert.equal(first.embedder.seen.length, built);
+    assert.equal(first.rebuilds.length, 0);
+
+    // …and a rebuild asked for embeds all of it, after asking.
+    await first.plugin.buildIndex(false, true);
+    assert.equal(first.rebuilds.length, 1);
+    assert.doesNotMatch(first.rebuilds[0]!.join(" "), /format v/, "the reader asked; nothing is out of date");
+    assert.equal(first.embedder.seen.length, built * 2);
+
+    const declined = await load(root, { rebuild: false });
+    declined.app.local.set(...([...first.app.local][0]!));
+    await declined.plugin.buildIndex(false, true);
+    assert.equal(declined.rebuilds.length, 1);
+    assert.deepEqual(declined.embedder.seen, []);
 });
 
 test("canceling keeps the live index and resumes where it stopped", async () => {
