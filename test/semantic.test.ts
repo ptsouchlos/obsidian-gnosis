@@ -19,6 +19,7 @@ import { RUNTIMES, queryVectors, unsupportedReason, type EmbedderFactory, type T
 import { MemoryModelStore } from "../src/model-store.js";
 import type { QueryModel } from "../src/models.js";
 import { modelStatus } from "../src/status.js";
+import { isImage, thumbnailSize } from "../src/results.js";
 import type { Hit, SpaceInfo } from "../src/types.js";
 
 declare const GNOSIS_TEST_VAULT: string;
@@ -402,4 +403,107 @@ test("an index built with a model the plugin cannot run says so on the card", ()
     assert.equal(status.state, "unsupported");
     assert.match(status.detail, /Keyword search and related notes still work/);
     assert.equal(status.canDelete, false);
+});
+
+/** A factory that answers each model with its own stand-in, by the space it embeds into. */
+function perSpace(text: TextEmbedder, image: TextEmbedder, started: QueryModel[] = []): EmbedderFactory {
+    return async (model) => {
+        started.push(model);
+        return model.space === "image" ? image : text;
+    };
+}
+
+/** The picker, opened once both models have loaded. */
+async function imagePicker(plugin: GnosisPlugin) {
+    assert.equal(await plugin.enableImageSearch(), true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    search(plugin);
+    await waitFor("the search modal", () => openedModals.length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return openedModals.at(-1)!;
+}
+
+test("turning image search on asks for CLIP, names its source, and stays off if declined", async () => {
+    const { plugin, consented } = await load({ agree: false });
+    assert.equal(await plugin.enableImageSearch(), false);
+    assert.equal(plugin.settings.searchImages, false);
+    const [model] = consented[0]!;
+    assert.match(model!.what, /clip-vit-b-32 \(Qdrant\/clip-ViT-B-32-text, revision 48ca1db\)/);
+    assert.equal(model!.from, "huggingface.co");
+
+    const agreed = await load({ agree: true });
+    assert.equal(await agreed.plugin.enableImageSearch(), true);
+    assert.equal(agreed.plugin.settings.searchImages, true);
+});
+
+test("a text query finds an image by the image space's own vector, mixed in with notes", async () => {
+    const text = new StandIn([0, 0, 0, 1]);
+    const image = new StandIn([0, 0, 1]);
+    const { plugin } = await load({ factory: perSpace(text, image) });
+    const modal = await imagePicker(plugin);
+
+    // No word matches, and the text model is off, so the image vector alone ranks.
+    const hits = (await modal.type("xyzzy")) as Hit[];
+    assert.deepEqual(image.seen, ["xyzzy"], "CLIP is queried with the words as typed, no instruction");
+    assert.deepEqual(text.seen, [], "the text model is not started for images alone");
+    assert.deepEqual(hits.map((h) => h.path), ["notes/loaf.png"]);
+});
+
+test("with both switches on, one query embeds into both spaces", async () => {
+    const text = new StandIn([0, 0, 1, 0]);
+    const image = new StandIn([1, 0, 0]);
+    const { plugin } = await load({ factory: perSpace(text, image) });
+    assert.equal(await plugin.enableSemanticSearch(), true);
+    const modal = await imagePicker(plugin);
+
+    await modal.type("sourdough");
+    assert.deepEqual(text.seen, [`${BGE_INSTRUCTION}sourdough`]);
+    assert.deepEqual(image.seen, ["sourdough"]);
+});
+
+test("image search does nothing for an index without images", async () => {
+    const { plugin } = await load({});
+    const index = (await (plugin as never as { withIndex(): Promise<unknown> }).withIndex()) as {
+        info(): { spaces: { space: string }[] };
+    };
+    assert.ok(index.info().spaces.some((s) => s.space === "image"), "the fixture has an image space");
+    await plugin.disableImageSearch();
+    assert.equal(plugin.settings.searchImages, false);
+    search(plugin);
+    await waitFor("the search modal", () => openedModals.length > 0);
+    assert.equal(notices.length, 0, "off means the images are ignored without a word");
+});
+
+test("turning image search off shuts CLIP down and leaves the text model alone", async () => {
+    const text = new StandIn([1, 0, 0, 0]);
+    const image = new StandIn([1, 0, 0]);
+    const { plugin } = await load({ factory: perSpace(text, image) });
+    await plugin.enableSemanticSearch();
+    await imagePicker(plugin);
+    await plugin.disableImageSearch();
+    assert.equal(image.disposed, true);
+    assert.equal(text.disposed, false);
+});
+
+test("deleting the model removes CLIP too, and turns image search off", async () => {
+    const { plugin } = await load({});
+    const store = new MemoryModelStore();
+    store.held_.add("Xenova/bge-small-en-v1.5");
+    store.held_.add("Qdrant/clip-ViT-B-32-text");
+    plugin.modelStore = store;
+    await plugin.enableImageSearch();
+    plugin.confirmDelete = async () => true;
+    await plugin.deleteModel();
+    assert.equal(plugin.settings.searchImages, false);
+    assert.deepEqual([...store.held_], [], "both models are gone");
+});
+
+test("a hit is an image when it has pixel dimensions, and a thumbnail keeps its proportions", () => {
+    const note = { width: null, height: null } as Hit;
+    const photo = { width: 4000, height: 3000 } as Hit;
+    assert.equal(isImage(note), false);
+    assert.equal(isImage(photo), true);
+    assert.deepEqual(thumbnailSize(4000, 3000), { width: 96, height: 72 });
+    assert.deepEqual(thumbnailSize(40, 30), { width: 40, height: 30 }, "never enlarged");
+    assert.deepEqual(thumbnailSize(0, 0), { width: 1, height: 1 });
 });

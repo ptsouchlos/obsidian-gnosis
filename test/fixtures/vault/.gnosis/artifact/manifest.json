@@ -18,7 +18,7 @@
         "id": "clip-vit-b-32-vision",
         "pooling": "mean",
         "dim": 3,
-        "query_id": "clip-vit-b-32-text",
+        "query_id":"clip-vit-b-32",
         "query_prefix": "",
         "document_prefix": ""
       }

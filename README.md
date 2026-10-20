@@ -43,6 +43,17 @@ shows what comes back.
   index rather than assumed, so an index built with `query_instruction = false`
   is queried without the instruction, as the CLI would.
 
+**Image search, once you turn it on** (Settings → Search images):
+
+- Images the CLI indexed turn up in **Search vault**, mixed in with notes and
+  shown with a thumbnail; choosing one opens the image. A text query reaches
+  them through CLIP's text tower (`Qdrant/clip-ViT-B-32-text`, 258 MB, the
+  files the CLI uses), a second model that is asked for separately and only
+  does anything when the open index has an image space.
+- It reproduces the CLI's image scores to 2e-7 and ranks them identically
+  (`test/image-parity.test.ts`).
+- *Delete model* removes CLIP too and turns this off; the model card counts it.
+
 **Building the index here** (command: *Build index*), desktop only:
 
 - Builds with gnosis's own `Builder`, compiled to WebAssembly — the same
@@ -71,8 +82,7 @@ shows what comes back.
 
 - **Staleness reporting** — "built 3 days ago, 47 notes have changed since",
   and rebuilding automatically when notes change.
-- **Images and PDFs**, which only the CLI indexes; a text query against images
-  needs CLIP's text tower, a second model.
+- **Indexing images here, and PDFs**, which only the CLI does.
 
 ## Getting started
 
@@ -150,6 +160,11 @@ Three suites, each answering something the others cannot:
   with images off — the plugin builds notes only, so an image would be one
   document the two sides disagree on:
   `GNOSIS_PARITY_VAULT=/path/to/vault npm test`. Downloads the model.
+- `test/image-parity.test.ts` — CLIP's text tower, against the CLI: each query
+  must score every image as `gnosis search --in image` does, in the same
+  order. Skipped unless pointed at a vault with images, indexed and exported
+  with f32 vectors (`GNOSIS_PARITY_VAULT=/path/to/vault npm test`, `gnosis` on
+  the PATH, `GNOSIS_FASTEMBED_CACHE` to reuse the CLI's model cache).
 - `test/real-vault.test.ts` — the same plugin against a real vault, skipped
   unless pointed at one: `GNOSIS_VAULT=/path/to/vault npm test`. It asserts the
   thing a fixture cannot — that every result resolves to a file that is

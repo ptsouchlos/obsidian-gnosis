@@ -19,16 +19,13 @@
 import "./web-env.js";
 import loaderSource from "gnosis:ort-loader";
 import { RUNTIME_CACHE } from "../model-store.js";
-import { env, pipeline } from "@huggingface/transformers";
-import type { FeatureExtractionPipeline } from "@huggingface/transformers";
+import { AutoTokenizer, CLIPTextModelWithProjection, env, pipeline } from "@huggingface/transformers";
 import type { Done, LoadRequest, Progress, Request, Response, RuntimeSpec } from "./protocol.js";
 
-interface Loaded {
-    extractor: FeatureExtractionPipeline;
-    pooling: "cls" | "mean";
-}
+/** Unit vectors for texts, flat: `texts.length * dim` floats. */
+type Embed = (texts: string[]) => Promise<{ vectors: Float32Array; dim: number }>;
 
-let loaded: Loaded | null = null;
+let loaded: Embed | null = null;
 
 function post(message: Response, transfer: Transferable[] = []): void {
     (self as unknown as Worker).postMessage(message, transfer);
@@ -138,28 +135,58 @@ async function load(request: LoadRequest): Promise<void> {
     env.allowLocalModels = false;
     env.useBrowserCache = true;
 
-    const extractor = await pipeline("feature-extraction", request.repo, {
+    const options = {
         revision: request.revision,
         dtype: request.dtype,
+        subfolder: request.subfolder,
         device: request.device,
-        progress_callback: (info) => {
+        progress_callback: (info: { status: string; file?: string; loaded?: number; total?: number }) => {
             if (info.status === "progress") {
-                post({ id: request.id, type: "progress", file: info.file, loaded: info.loaded, total: info.total });
+                post({
+                    id: request.id,
+                    type: "progress",
+                    file: info.file ?? "",
+                    loaded: info.loaded ?? 0,
+                    total: info.total ?? 0,
+                });
             }
         },
-    });
-    loaded = { extractor, pooling: request.pooling };
+    };
+
+    if (request.architecture === "clip-text") {
+        // CLIP's text tower lands a query among the vectors its vision tower
+        // gave the images. Its vector is the projected `text_embeds`, not a
+        // pooled hidden state: against the CLI the projection reproduces
+        // every image score to 2e-7, where pooling reorders the results.
+        const tokenizer = await AutoTokenizer.from_pretrained(request.repo, { revision: request.revision });
+        const clip = await CLIPTextModelWithProjection.from_pretrained(request.repo, {
+            ...options,
+            // Qdrant's export names its file `model.onnx`, not `text_model.onnx`.
+            model_file_name: "model",
+        });
+        loaded = async (texts) => {
+            const inputs = tokenizer(texts, { padding: true, truncation: true });
+            const { text_embeds } = await clip(inputs);
+            const unit = text_embeds.normalize(2, -1);
+            return { vectors: Float32Array.from(unit.data as Float32Array), dim: unit.dims.at(-1) ?? 0 };
+        };
+        return;
+    }
+
+    const extractor = await pipeline("feature-extraction", request.repo, options);
+    loaded = async (texts) => {
+        // `normalize` because gnosis's stored vectors are unit length — fastembed
+        // normalizes — and its dense score is a dot product that assumes it.
+        const output = await extractor(texts, { pooling: request.pooling, normalize: true });
+        return { vectors: Float32Array.from(output.data as Float32Array), dim: output.dims.at(-1) ?? 0 };
+    };
 }
 
 async function embed(id: number, texts: string[]): Promise<Done> {
     if (loaded === null) {
         throw new Error("the embedder was asked to embed before a model was loaded");
     }
-    // `normalize` because gnosis's stored vectors are unit length — fastembed
-    // normalizes — and its dense score is a dot product that assumes it.
-    const output = await loaded.extractor(texts, { pooling: loaded.pooling, normalize: true });
-    const dim = output.dims.at(-1) ?? 0;
-    const vectors = Float32Array.from(output.data as Float32Array);
+    const { vectors, dim } = await loaded(texts);
     return { id, type: "done", vectors, dim };
 }
 

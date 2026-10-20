@@ -41,7 +41,7 @@ export function repoPrefix(model: QueryModel): string {
 
 /** The weights, as transformers.js names them for `dtype: "fp32"`. */
 export function weightsUrl(model: QueryModel): string {
-    return `${repoPrefix(model)}${model.revision}/onnx/model.onnx`;
+    return `${repoPrefix(model)}${model.revision}/${model.subfolder === "" ? "" : `${model.subfolder}/`}model.onnx`;
 }
 
 async function size(response: Response): Promise<number> {

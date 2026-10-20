@@ -7,7 +7,7 @@ import type { App, PaneType } from "obsidian";
 import { QUIET_MS } from "./auto-update.js";
 import { REPORT_PATH } from "./diagnostics.js";
 import type GnosisPlugin from "./main.js";
-import { DEFAULT_BUILD_MODEL, QUERY_MODELS } from "./models.js";
+import { DEFAULT_BUILD_MODEL, textModels } from "./models.js";
 import type { Recency, Strategy, TitleBonus } from "./ranking.js";
 import { stalenessLine } from "./staleness.js";
 import type { IndexStatus, ModelStatus } from "./status.js";
@@ -34,6 +34,13 @@ export interface GnosisSettings {
      * source in front of them, not a default.
      */
     semanticSearch: boolean;
+    /**
+     * Find the images an index holds, by what a text query describes.
+     *
+     * Off until turned on, for the same reason as `semanticSearch`: it
+     * downloads a second model, CLIP's, which is the reader's decision.
+     */
+    searchImages: boolean;
     /**
      * The model "Build index" uses for a vault with no index yet. An existing
      * index is always rebuilt with its own model, whatever this says.
@@ -81,6 +88,7 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     artifactDir: ".gnosis/artifact",
     limit: 20,
     semanticSearch: false,
+    searchImages: false,
     buildModel: DEFAULT_BUILD_MODEL,
     strategy: "balanced",
     titleBonus: "default",
@@ -270,7 +278,7 @@ export class GnosisSettingTab extends PluginSettingTab {
                     "index keeps its own model; to switch, delete it and build again.",
             )
             .addDropdown((dropdown) => {
-                for (const [id, model] of Object.entries(QUERY_MODELS)) {
+                for (const [id, model] of textModels()) {
                     dropdown.addOption(id, model.label);
                 }
                 dropdown.setValue(this.plugin.settings.buildModel).onChange(async (value) => {
@@ -444,6 +452,24 @@ export class GnosisSettingTab extends PluginSettingTab {
                         await this.plugin.disableSemanticSearch();
                     } else if (!(await this.plugin.enableSemanticSearch())) {
                         // Turning it on asks first; a refusal puts the toggle back.
+                        toggle.setValue(false);
+                    }
+                    drawSearch();
+                }),
+            );
+
+        this.card(new Setting(containerEl))
+            .setName("Search images")
+            .setDesc(
+                "Find the images in your index by describing them, mixed in with note results. " +
+                    "Downloads CLIP, a second model, once; queries and images stay on this device. " +
+                    "Needs an index that includes images.",
+            )
+            .addToggle((toggle) =>
+                toggle.setValue(this.plugin.settings.searchImages).onChange(async (on) => {
+                    if (!on) {
+                        await this.plugin.disableImageSearch();
+                    } else if (!(await this.plugin.enableImageSearch())) {
                         toggle.setValue(false);
                     }
                     drawSearch();
