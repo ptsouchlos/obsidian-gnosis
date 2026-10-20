@@ -7,7 +7,7 @@
 //! machines can be caught in.
 
 import type { App } from "obsidian";
-import init, { Index } from "../vendor/gnosis-wasm/gnosis_wasm.js";
+import init, { Index, artifactFormatVersion } from "../vendor/gnosis-wasm/gnosis_wasm.js";
 import wasmBytes from "../vendor/gnosis-wasm/gnosis_wasm_bg.wasm";
 
 /** The manifest, as far as the plugin needs to know. */
@@ -53,6 +53,31 @@ export function join(dir: string, name: string): string {
 }
 
 /**
+ * Whether an index is in a format this build cannot open, and so has to be
+ * rebuilt rather than reused: `{ found, supported }` if it is, else `null`.
+ * The module has to be started first, since it knows the version it reads.
+ */
+export async function olderFormat(manifestJson: string): Promise<{ found: number; supported: number } | null> {
+    await startWasm();
+    let found: unknown;
+    try {
+        found = (JSON.parse(manifestJson) as { format_version?: unknown }).format_version;
+    } catch {
+        return null;
+    }
+    const supported = artifactFormatVersion();
+    return typeof found === "number" && found !== supported ? { found, supported } : null;
+}
+
+/** What the reader is told about an index in another format. */
+export function olderFormatMessage(format: { found: number; supported: number }): string {
+    return (
+        `this index is in format v${format.found}, and this version reads v${format.supported} — ` +
+        `run "Rebuild index" to rebuild it`
+    );
+}
+
+/**
  * Read the artifact in `dir` and open it.
  *
  * Shards are read through the vault adapter rather than `fs`, so this works
@@ -62,7 +87,10 @@ export function join(dir: string, name: string): string {
  */
 export async function openArtifact(app: App, dir: string): Promise<Index> {
     const raw = await readArtifact(app, dir);
-    await startWasm();
+    const format = await olderFormat(raw.manifestJson);
+    if (format !== null) {
+        throw new Error(olderFormatMessage(format));
+    }
     return Index.open(raw.manifestJson, raw.shards as unknown as Map<unknown, unknown>);
 }
 

@@ -85,7 +85,7 @@ const aNotice = () => waitFor("a notice", () => notices.length > 0);
 test("the plugin registers its commands", async () => {
     const { plugin } = await load();
     const ids = [...(plugin as never as { commands: Map<string, unknown> }).commands.keys()];
-    assert.deepEqual(ids.sort(), ["build-index", "cancel-build", "index-info", "related", "search"]);
+    assert.deepEqual(ids.sort(), ["build-index", "cancel-build", "index-info", "rebuild-index", "related", "search"]);
 });
 
 test("the index describes itself from the artifact in the vault", async () => {

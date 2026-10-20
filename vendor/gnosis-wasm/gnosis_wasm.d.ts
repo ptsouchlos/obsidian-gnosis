@@ -149,6 +149,15 @@ export class Index {
 }
 
 /**
+ * The artifact format version this build reads and writes.
+ *
+ * A client compares it with a manifest's `format_version` to tell an index it
+ * must rebuild from one it can open, rather than finding out from the error
+ * that opening raises.
+ */
+export function artifactFormatVersion(): number;
+
+/**
  * The content hash `addDocument` records for `text`, for `Index.staleness`.
  *
  * A client that sends a hash gets an exact answer, where an mtime moves
@@ -162,6 +171,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_builder_free: (a: number, b: number) => void;
     readonly __wbg_index_free: (a: number, b: number) => void;
+    readonly artifactFormatVersion: () => number;
     readonly builder_addDocument: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly builder_create: (a: number, b: number) => void;
     readonly builder_documentCount: (a: number, b: number) => void;

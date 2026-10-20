@@ -3,6 +3,7 @@
 export const memory: WebAssembly.Memory;
 export const __wbg_builder_free: (a: number, b: number) => void;
 export const __wbg_index_free: (a: number, b: number) => void;
+export const artifactFormatVersion: () => number;
 export const builder_addDocument: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const builder_create: (a: number, b: number) => void;
 export const builder_documentCount: (a: number, b: number) => void;
