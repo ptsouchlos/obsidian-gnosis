@@ -4,7 +4,13 @@
 //! the decisions are testable without a vault.
 
 import { queryModelFor } from "../models.js";
-import type { BuildProgress, BuildSpec } from "./job.js";
+import type { BuildProgress, BuildSpec, ImageSpec } from "./job.js";
+
+/**
+ * The image space a build records. CLIP ViT-B/32 is the one image model the
+ * CLI builds, so it is the one the plugin can.
+ */
+export const CLIP_SPACE: ImageSpec = { model: "clip-vit-b-32", queryId: "clip-vit-b-32", dim: 512 };
 
 /** The parts of a manifest a build decision reads. Snake case: it is the file's own. */
 interface ManifestView {
@@ -14,7 +20,14 @@ interface ManifestView {
     roots: string[];
     spaces: {
         space: string;
-        model: { id: string; pooling: string; dim: number; query_prefix: string; document_prefix: string };
+        model: {
+            id: string;
+            pooling: string;
+            dim: number;
+            query_id?: string;
+            query_prefix: string;
+            document_prefix: string;
+        };
     }[];
     shard_docs: number;
     shards: { documents: number }[];
@@ -50,7 +63,12 @@ export const SHARD_DOCS = 32;
  * CLI or another device wrote keeps its own, or a rebuild here would move
  * every note between shards.
  */
-export function specFromManifest(manifestJson: string, vaultName: string, writtenHere: boolean): Planned {
+export function specFromManifest(
+    manifestJson: string,
+    vaultName: string,
+    writtenHere: boolean,
+    withImages = false,
+): Planned {
     const manifest = JSON.parse(manifestJson) as ManifestView;
     const text = manifest.spaces.find((s) => s.space === "text");
     if (text === undefined) {
@@ -67,6 +85,14 @@ export function specFromManifest(manifestJson: string, vaultName: string, writte
     if (pooling !== "cls" && pooling !== "mean") {
         return { refuse: `the existing index records pooling '${pooling}', which this plugin does not know` };
     }
+    const image = manifest.spaces.find((s) => s.space === "image");
+    if (withImages && image !== undefined && (image.model.id !== CLIP_SPACE.model || image.model.dim !== CLIP_SPACE.dim)) {
+        return {
+            refuse:
+                `the existing index has an image space built with '${image.model.id}' at ${image.model.dim}d, ` +
+                `which this plugin cannot run — turn off Search images to rebuild without it, or rebuild it with the gnosis CLI`,
+        };
+    }
     return {
         spec: {
             model: id,
@@ -78,12 +104,13 @@ export function specFromManifest(manifestJson: string, vaultName: string, writte
             quantization: manifest.quantization,
             compression: manifest.compression,
             shardDocs: writtenHere ? SHARD_DOCS : manifest.shard_docs,
+            ...(withImages ? { image: CLIP_SPACE } : {}),
         },
     };
 }
 
 /** A first index for this vault, with the model the reader picked. */
-export function specForNewIndex(modelId: string, vaultName: string): Planned {
+export function specForNewIndex(modelId: string, vaultName: string, withImages = false): Planned {
     const model = queryModelFor(modelId);
     if (model === null) {
         return { refuse: `'${modelId}' is not a model this plugin can build with` };
@@ -97,6 +124,7 @@ export function specForNewIndex(modelId: string, vaultName: string): Planned {
             documentPrefix: model.documentPrefix,
             root: vaultName,
             shardDocs: SHARD_DOCS,
+            ...(withImages ? { image: CLIP_SPACE } : {}),
         },
     };
 }
@@ -108,7 +136,7 @@ export function specForNewIndex(modelId: string, vaultName: string): Planned {
  * hold more — images, other folders — and a rebuild here would drop them, so
  * the reader is told before agreeing rather than discovering it after.
  */
-export function replaceWarning(manifestJson: string, vaultName: string): string[] {
+export function replaceWarning(manifestJson: string, vaultName: string, withImages = false): string[] {
     const manifest = JSON.parse(manifestJson) as ManifestView;
     const documents = manifest.shards.reduce((n, s) => n + s.documents, 0);
     const text = manifest.spaces.find((s) => s.space === "text");
@@ -120,10 +148,10 @@ export function replaceWarning(manifestJson: string, vaultName: string): string[
         "Building here replaces it with one built on this device. Unchanged notes are carried " +
             "over rather than re-embedded.",
     ];
-    if (manifest.spaces.some((s) => s.space === "image")) {
+    if (manifest.spaces.some((s) => s.space === "image") && !withImages) {
         lines.push(
-            "It also searches images, which the plugin cannot index yet — the rebuilt index will " +
-                "not include them. The gnosis CLI can add them back.",
+            "It also searches images, and Search images is off — the rebuilt index will not " +
+                "include them. Turn Search images on to index them here, or use the gnosis CLI.",
         );
     }
     if (manifest.roots.length !== 1 || manifest.roots[0] !== vaultName) {
@@ -138,7 +166,9 @@ export function replaceWarning(manifestJson: string, vaultName: string): string[
 /** A rough minutes-left figure, once there is enough history to make one. */
 function estimate(progress: BuildProgress): string {
     const embeddedNotes = progress.notesDone - progress.notesReused;
-    if (progress.elapsedMs < 20_000 || embeddedNotes < 5 || progress.chunksEmbedded === 0) {
+    // The figure is how fast notes go; images run at their own pace, so with
+    // any in the build it would be a guess dressed as an estimate.
+    if (progress.imagesTotal > 0 || progress.elapsedMs < 20_000 || embeddedNotes < 5 || progress.chunksEmbedded === 0) {
         return "";
     }
     const chunksPerNote = progress.chunksEmbedded / embeddedNotes;
@@ -151,9 +181,13 @@ function estimate(progress: BuildProgress): string {
 
 /** The status bar while a build runs. */
 export function statusLine(progress: BuildProgress): string {
+    const images =
+        progress.imagesTotal === 0
+            ? ""
+            : ` · ${progress.imagesDone.toLocaleString()}/${progress.imagesTotal.toLocaleString()} images`;
     return (
         `Gnosis: indexing ${progress.notesDone.toLocaleString()}/${progress.notesTotal.toLocaleString()} notes` +
-        ` · ${progress.chunksEmbedded.toLocaleString()} chunks embedded${estimate(progress)}`
+        `${images} · ${progress.chunksEmbedded.toLocaleString()} chunks embedded${estimate(progress)}`
     );
 }
 
@@ -170,6 +204,7 @@ export function rebuildWarning(
     vaultName: string,
     format: { found: number; supported: number } | null,
     writtenElsewhere: boolean,
+    withImages = false,
 ): string[] {
     const lines =
         format === null
@@ -183,7 +218,7 @@ export function rebuildWarning(
             "stays in use until the new one is written, and keeps its model and settings.",
     );
     if (writtenElsewhere) {
-        lines.push(...replaceWarning(manifestJson, vaultName));
+        lines.push(...replaceWarning(manifestJson, vaultName, withImages));
     }
     return lines;
 }

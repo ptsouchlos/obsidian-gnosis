@@ -30,7 +30,7 @@ import {
     type RawArtifact,
 } from "./artifact.js";
 import { IndexedDbCheckpoints, type CheckpointStore } from "./build/checkpoints.js";
-import { runBuild, type BuildProgress, type BuildResult, type BuildSpec, type Note } from "./build/job.js";
+import { runBuild, type BuildProgress, type BuildResult, type BuildSpec, type ImageFile, type ImageSpec, type Note } from "./build/job.js";
 import { rebuildWarning, replaceWarning, specForNewIndex, specFromManifest, statusLine } from "./build/plan.js";
 import { copyArtifact, manifestHash, removeArtifact, writeArtifact } from "./build/write.js";
 import { askConsent, confirm, downloadsFor, megabytes, type Download } from "./consent.js";
@@ -47,12 +47,15 @@ import {
     RUNTIMES,
     queryVectors,
     startWorkerEmbedder,
+    startWorkerVision,
     unsupportedReason,
     webgpuAdapter,
     type Device,
     type DownloadProgress,
     type EmbedderFactory,
+    type ImageEmbedder,
     type TextEmbedder,
+    type VisionFactory,
 } from "./embedder.js";
 import { LexicalSearchModal, SemanticSearchModal, type Display } from "./modals.js";
 import { queryModelFor } from "./models.js";
@@ -85,6 +88,8 @@ export default class GnosisPlugin extends Plugin {
 
     /** How an embedder is started; tests replace the worker with a stand-in. */
     embedderFactory: EmbedderFactory = startWorkerEmbedder;
+    /** How the vision tower is started, for a build with images. */
+    visionFactory: VisionFactory = startWorkerVision;
     /** Whether this device has a WebGPU adapter; tests answer for it. */
     hasWebgpu: () => Promise<boolean> = webgpuAdapter;
     /** The adapter check, once per session: it does not change while Obsidian runs. */
@@ -512,7 +517,10 @@ export default class GnosisPlugin extends Plugin {
     async enableImageSearch(): Promise<boolean> {
         const device = await this.chooseDevice(false);
         const clip = queryModelFor(CLIP_MODEL)!;
-        if (!(await this.askConsent(downloadsFor(CLIP_MODEL, clip, RUNTIMES[device], device)))) {
+        const vision = queryModelFor(CLIP_VISION_MODEL)!;
+        const [text, runtime] = downloadsFor(CLIP_MODEL, clip, RUNTIMES[device], device);
+        const [visionDownload] = downloadsFor(CLIP_VISION_MODEL, vision, RUNTIMES[device], device);
+        if (!(await this.askConsent([text!, { ...visionDownload!, later: true }, runtime!]))) {
             return false;
         }
         this.settings.searchImages = true;
@@ -710,9 +718,11 @@ export default class GnosisPlugin extends Plugin {
         const held = model === null ? null : await this.modelStore.held(model, RUNTIME_URLS).catch(() => null);
         // CLIP's text tower is held beside it once images are searched: the
         // card counts it, so the size shown is what Delete will free.
-        const clip = queryModelFor(CLIP_MODEL)!;
-        const clipHeld = await this.modelStore.held(clip, []).catch(() => null);
-        const clipBytes = clipHeld?.modelBytes ?? 0;
+        let clipBytes = 0;
+        for (const id of CLIP_MODELS) {
+            const clipHeld = await this.modelStore.held(queryModelFor(id)!, []).catch(() => null);
+            clipBytes += clipHeld?.modelBytes ?? 0;
+        }
         return modelStatus({
             modelId: id,
             dim,
@@ -745,7 +755,7 @@ export default class GnosisPlugin extends Plugin {
             return;
         }
         const agreed = await this.confirmDelete([
-            `This removes ${id}, the image model CLIP if it is downloaded, and ONNX Runtime from this device. Your index is not affected, and ` +
+            `This removes ${id}, the image models CLIP if they are downloaded, and ONNX Runtime from this device. Your index is not affected, and ` +
                 "keyword search and related notes keep working.",
             "Semantic search and image search are turned off. Turning them back on, or building an index, downloads the " +
                 "model again. Another plugin that uses the same model downloads it again too.",
@@ -763,8 +773,10 @@ export default class GnosisPlugin extends Plugin {
             this.settings.searchImages = false;
             await this.saveSettings();
         }
-        const clip = queryModelFor(CLIP_MODEL)!;
-        const freedClip = await this.modelStore.remove(clip, []);
+        let freedClip = 0;
+        for (const id of CLIP_MODELS) {
+            freedClip += await this.modelStore.remove(queryModelFor(id)!, []);
+        }
         const freed = (await this.modelStore.remove(model, RUNTIME_URLS)) + freedClip;
         new Notice(`Gnosis: deleted the model — ${megabytes(freed)} freed`);
         this.statusChanged();
@@ -1001,9 +1013,12 @@ export default class GnosisPlugin extends Plugin {
         const format = live === null ? null : await olderFormat(live.manifestJson);
 
         const liveHash = live === null ? null : await manifestHash(live.manifestJson);
+        // Images are indexed when the reader has turned image search on, and
+        // otherwise left out of an index built here.
+        const withImages = this.settings.searchImages;
         const planned = live === null
-            ? specForNewIndex(this.settings.buildModel, vaultName)
-            : specFromManifest(live.manifestJson, vaultName, liveHash === this.lastWritten());
+            ? specForNewIndex(this.settings.buildModel, vaultName, withImages)
+            : specFromManifest(live.manifestJson, vaultName, liveHash === this.lastWritten(), withImages);
         if ("refuse" in planned) {
             if (auto) {
                 return { outcome: "not started", error: planned.refuse, skipped: planned.refuse };
@@ -1018,7 +1033,7 @@ export default class GnosisPlugin extends Plugin {
             if (auto) {
                 return { outcome: "not started", skipped: SKIP_OLD_FORMAT };
             }
-            const lines = rebuildWarning(live.manifestJson, vaultName, format, liveHash !== this.lastWritten());
+            const lines = rebuildWarning(live.manifestJson, vaultName, format, liveHash !== this.lastWritten(), withImages);
             if (!(await this.confirmRebuild(lines))) {
                 return { outcome: "not started" };
             }
@@ -1026,7 +1041,7 @@ export default class GnosisPlugin extends Plugin {
             if (auto) {
                 return { outcome: "not started", skipped: SKIP_WRITTEN_ELSEWHERE };
             }
-            if (!(await this.confirmReplace(replaceWarning(live.manifestJson, vaultName)))) {
+            if (!(await this.confirmReplace(replaceWarning(live.manifestJson, vaultName, withImages)))) {
                 return { outcome: "not started" };
             }
         }
@@ -1045,8 +1060,28 @@ export default class GnosisPlugin extends Plugin {
         if (!consented && !(await this.askConsent(downloadsFor(spec.model, model, RUNTIMES[device], device)))) {
             return { outcome: "not started" };
         }
+        const images = spec.image === undefined ? [] : this.images();
+        if (auto && images.length > 0) {
+            // The vision tower is a 352 MB download the image switch covers
+            // but an update nobody asked for does not start.
+            const held = await this.modelStore.held(queryModelFor(CLIP_VISION_MODEL)!, []).catch(() => null);
+            if (held === null || !held.modelComplete) {
+                return { outcome: "not started", skipped: SKIP_NO_IMAGE_MODEL };
+            }
+        }
         const embedder = await this.startEmbedder(space, device, auto);
+        // CLIP's text tower embeds every title, as a proxy for the document in
+        // the image space; the vision tower embeds the images.
+        const titleEmbedder =
+            spec.image === undefined ? null : await this.startEmbedder(imageSpecSpace(spec.image), device, auto);
         await startWasm();
+        // Started on first use: a rebuild whose images are all unchanged
+        // never needs the 352 MB model, and should not load it.
+        let vision: Promise<ImageEmbedder> | null = null;
+        const embedImages = async (bytes: Uint8Array[]) => {
+            vision ??= this.startVision(device, auto);
+            return (await vision).embedImages(bytes);
+        };
 
         const vault = this.vaultKey();
         const specKey = JSON.stringify(spec);
@@ -1065,8 +1100,11 @@ export default class GnosisPlugin extends Plugin {
         const result = await runBuild({
             spec,
             notes: this.notes(),
+            images,
             base: resuming ? saved.artifact : rebuilding ? null : live,
             embed: (texts) => embedder.embed(texts),
+            ...(titleEmbedder === null ? {} : { embedTitles: (titles: string[]) => titleEmbedder.embed(titles) }),
+            ...(images.length === 0 ? {} : { embedImages }),
             checkpoint: (artifact) => this.checkpoints.save(vault, { specKey, artifact, savedAt: Date.now() }),
             signal,
             onProgress: (progress: BuildProgress) => {
@@ -1078,7 +1116,13 @@ export default class GnosisPlugin extends Plugin {
             yieldToUi: () => new Promise((resolve) => setTimeout(resolve, 0)),
             checkpointEveryMs: this.checkpointEveryMs,
             batchChunks: BATCH_CHUNKS[device],
+        }).finally(() => {
+            // Whether it finished, failed or was canceled: nothing keeps the model loaded.
+            void (vision as Promise<ImageEmbedder> | null)?.then((v) => v.dispose(), () => {});
         });
+        for (const file of result.skipped) {
+            this.diagnostics.record("error", `skipped an image that would not decode: ${file.message}`);
+        }
 
         if (result.canceled || result.artifact === null) {
             new Notice(
@@ -1105,7 +1149,7 @@ export default class GnosisPlugin extends Plugin {
             if (auto) {
                 return { outcome: "not written", result, skipped: SKIP_WRITTEN_ELSEWHERE };
             }
-            if (!(await this.confirmReplace(replaceWarning(current.manifestJson, vaultName)))) {
+            if (!(await this.confirmReplace(replaceWarning(current.manifestJson, vaultName, withImages)))) {
                 return { outcome: "not written", result };
             }
         }
@@ -1127,11 +1171,17 @@ export default class GnosisPlugin extends Plugin {
             await this.saveSettings();
         }
         if (!auto) {
+            const pictures = result.imagesEmbedded + result.imagesReused;
+            const imageLine =
+                pictures === 0 && result.skipped.length === 0
+                    ? ""
+                    : ` ${pictures.toLocaleString()} images (${result.imagesEmbedded.toLocaleString()} embedded)` +
+                      (result.skipped.length === 0 ? "." : `, ${result.skipped.length.toLocaleString()} skipped as unreadable.`);
             new Notice(
-                `Gnosis: indexed ${result.documents.toLocaleString()} notes, ` +
+                `Gnosis: indexed ${result.documents.toLocaleString()} ${pictures === 0 ? "notes" : "documents"}, ` +
                     `${result.chunks.toLocaleString()} chunks — ${result.chunksEmbedded.toLocaleString()} ` +
                     `embedded, ${result.notesReused.toLocaleString()} notes unchanged; ` +
-                    `${written.written} of ${written.written + written.unchanged} shard(s) written.`,
+                    `${written.written} of ${written.written + written.unchanged} shard(s) written.${imageLine}`,
                 10_000,
             );
         }
@@ -1161,10 +1211,52 @@ export default class GnosisPlugin extends Plugin {
         if (!path.endsWith(".md") || path === REPORT_PATH) {
             return false;
         }
+        return !this.isExcluded(path);
+    }
+
+    /** Whether the reader hid `path` from Obsidian with "Excluded files". */
+    private isExcluded(path: string): boolean {
         // Obsidian's own matcher, not public API: without it, nothing is
         // excluded rather than anything guessed.
         const ignored = (this.app.metadataCache as { isUserIgnored?: (path: string) => boolean }).isUserIgnored;
-        return !(this.settings.honorExcluded && typeof ignored === "function" && ignored.call(this.app.metadataCache, path));
+        return this.settings.honorExcluded && typeof ignored === "function" && ignored.call(this.app.metadataCache, path);
+    }
+
+    /**
+     * The image files `gnosis index` would index — PNG, JPEG, WebP — read
+     * lazily, and left out under the same "Excluded files" rule as notes.
+     */
+    private images(): ImageFile[] {
+        return this.app.vault
+            .getFiles()
+            .filter((file) => IMAGE_EXTENSIONS.has(file.extension.toLowerCase()) && !this.isExcluded(file.path))
+            .map((file) => ({
+                path: file.path,
+                mtime: file.stat.mtime,
+                read: async () => new Uint8Array(await this.app.vault.readBinary(file)),
+            }));
+    }
+
+    /** Start the vision tower for a build, reporting the download unless `quiet`. */
+    private async startVision(device: Device, quiet: boolean): Promise<ImageEmbedder> {
+        const model = queryModelFor(CLIP_VISION_MODEL)!;
+        const progress = new DownloadNotice();
+        const startedAt = this.diagnostics.now();
+        try {
+            const vision = await this.visionFactory(
+                model,
+                (p) => {
+                    if (!quiet) {
+                        progress.update(p);
+                    }
+                },
+                device,
+            );
+            this.diagnostics.record("model", `loaded the vision tower in ${this.diagnostics.now() - startedAt} ms`);
+            return vision;
+        } finally {
+            progress.hide();
+        }
     }
 
     /**
@@ -1362,6 +1454,8 @@ const SKIP_WRITTEN_ELSEWHERE =
     "Not updated automatically: another device or the gnosis CLI wrote this index. Update it here to take it over.";
 const SKIP_OLD_FORMAT =
     "Not updated automatically: this index is in an older format. Rebuild it to read it again.";
+const SKIP_NO_IMAGE_MODEL =
+    "Not updated automatically: the image model is not downloaded yet. Build the index by hand to fetch it.";
 const SKIP_NO_MODEL = "Not updated automatically: semantic search is off, so the model is not loaded.";
 
 function platformName(): string {
@@ -1375,9 +1469,29 @@ const RUNTIME_URLS = [RUNTIMES.wasm.url, RUNTIMES.webgpu.url];
 
 /** The model that answers text queries against the image space. */
 const CLIP_MODEL = "clip-vit-b-32";
+/** The tower that embeds the images themselves, for a build. */
+const CLIP_VISION_MODEL = "clip-vit-b-32-vision";
+/** Both CLIP towers: what the image switch covers, counted and deleted together. */
+const CLIP_MODELS = [CLIP_MODEL, CLIP_VISION_MODEL];
+/** The image files `gnosis index` indexes. */
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp"]);
 
 function embedderKey(space: SpaceInfo, device: Device): string {
     return `${space.queryModel}/${space.pooling}/${device}`;
+}
+
+/** The image space a build will produce, in the shape CLIP's text tower is started from. */
+function imageSpecSpace(image: ImageSpec): SpaceInfo {
+    return {
+        space: "image",
+        model: image.model,
+        queryModel: image.queryId,
+        pooling: "mean",
+        queryPrefix: "",
+        documentPrefix: "",
+        dim: image.dim,
+        chunks: 0,
+    };
 }
 
 /** The space a build will produce, in the shape the embedder is started from. */

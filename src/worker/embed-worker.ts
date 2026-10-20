@@ -19,13 +19,50 @@
 import "./web-env.js";
 import loaderSource from "gnosis:ort-loader";
 import { RUNTIME_CACHE } from "../model-store.js";
-import { AutoTokenizer, CLIPTextModelWithProjection, env, pipeline } from "@huggingface/transformers";
+import {
+    AutoTokenizer,
+    CLIPTextModelWithProjection,
+    CLIPVisionModelWithProjection,
+    Tensor,
+    env,
+    pipeline,
+} from "@huggingface/transformers";
+import { CLIP_SIZE, clipPixels } from "./preprocess.js";
 import type { Done, LoadRequest, Progress, Request, Response, RuntimeSpec } from "./protocol.js";
 
 /** Unit vectors for texts, flat: `texts.length * dim` floats. */
 type Embed = (texts: string[]) => Promise<{ vectors: Float32Array; dim: number }>;
+/** The same for the bytes of image files, with the ones that would not decode. */
+type EmbedImages = (
+    images: Uint8Array[],
+) => Promise<{ vectors: Float32Array; dim: number; failed: { index: number; message: string }[] }>;
 
 let loaded: Embed | null = null;
+let loadedImages: EmbedImages | null = null;
+
+/** An image file's pixels, as the CLI reads them: no orientation, no color management. */
+async function decode(bytes: Uint8Array): Promise<{ rgba: Uint8ClampedArray; width: number; height: number }> {
+    const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]), {
+        // The `image` crate the CLI decodes with applies neither, so neither
+        // is applied here: a vector that looked at a rotated or recolored
+        // picture would be a different vector.
+        imageOrientation: "none",
+        colorSpaceConversion: "none",
+        premultiplyAlpha: "none",
+    });
+    try {
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (context === null) {
+            throw new Error("no 2d canvas to read the image's pixels with");
+        }
+        context.drawImage(bitmap, 0, 0);
+        const { data, width, height } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+        return { rgba: data, width, height };
+    } finally {
+        bitmap.close();
+    }
+}
 
 function post(message: Response, transfer: Transferable[] = []): void {
     (self as unknown as Worker).postMessage(message, transfer);
@@ -153,6 +190,43 @@ async function load(request: LoadRequest): Promise<void> {
         },
     };
 
+    if (request.architecture === "clip-vision") {
+        const clip = await CLIPVisionModelWithProjection.from_pretrained(request.repo, {
+            ...options,
+            // Qdrant's export names its file `model.onnx`.
+            model_file_name: "model",
+        });
+        loadedImages = async (images) => {
+            const plane = 3 * CLIP_SIZE * CLIP_SIZE;
+            const failed: { index: number; message: string }[] = [];
+            const pixels = new Float32Array(images.length * plane);
+            const ok: number[] = [];
+            for (const [index, bytes] of images.entries()) {
+                try {
+                    const { rgba, width, height } = await decode(bytes);
+                    pixels.set(clipPixels(rgba, width, height), ok.length * plane);
+                    ok.push(index);
+                } catch (error) {
+                    failed.push({ index, message: error instanceof Error ? error.message : String(error) });
+                }
+            }
+            let dim = 0;
+            let vectors = new Float32Array(0);
+            if (ok.length > 0) {
+                const input = new Tensor("float32", pixels.subarray(0, ok.length * plane), [ok.length, 3, CLIP_SIZE, CLIP_SIZE]);
+                const { image_embeds } = await clip({ pixel_values: input });
+                const unit = image_embeds.normalize(2, -1);
+                dim = unit.dims.at(-1) ?? 0;
+                // Back to the caller's order, zeros where a file failed.
+                vectors = new Float32Array(images.length * dim);
+                const flat = unit.data as Float32Array;
+                ok.forEach((index, i) => vectors.set(flat.subarray(i * dim, (i + 1) * dim), index * dim));
+            }
+            return { vectors, dim, failed };
+        };
+        return;
+    }
+
     if (request.architecture === "clip-text") {
         // CLIP's text tower lands a query among the vectors its vision tower
         // gave the images. Its vector is the projected `text_embeds`, not a
@@ -190,12 +264,23 @@ async function embed(id: number, texts: string[]): Promise<Done> {
     return { id, type: "done", vectors, dim };
 }
 
+async function embedImages(id: number, images: Uint8Array[]): Promise<Done> {
+    if (loadedImages === null) {
+        throw new Error("the embedder was asked to embed images before a vision model was loaded");
+    }
+    const { vectors, dim, failed } = await loadedImages(images);
+    return { id, type: "done", vectors, dim, failed };
+}
+
 self.onmessage = (event: MessageEvent<Request>) => {
     const request = event.data;
     const run = async (): Promise<void> => {
         if (request.type === "load") {
             await load(request);
             post({ id: request.id, type: "done" });
+        } else if (request.type === "embedImages") {
+            const done = await embedImages(request.id, request.images);
+            post(done, done.vectors ? [done.vectors.buffer] : []);
         } else {
             const done = await embed(request.id, request.texts);
             post(done, done.vectors ? [done.vectors.buffer] : []);

@@ -37,7 +37,14 @@ export interface EmbedRequest {
     texts: string[];
 }
 
-export type Request = LoadRequest | EmbedRequest;
+/** Images to embed with the vision tower, as the bytes of their files. */
+export interface EmbedImagesRequest {
+    id: number;
+    type: "embedImages";
+    images: Uint8Array[];
+}
+
+export type Request = LoadRequest | EmbedRequest | EmbedImagesRequest;
 
 /** Bytes downloaded so far, across the runtime and every model file. */
 export interface Progress {
@@ -54,6 +61,11 @@ export interface Done {
     /** Flat, `texts.length * dim` floats, for an `embed` request. */
     vectors?: Float32Array;
     dim?: number;
+    /**
+     * For `embedImages`: the files that would not decode, by position. Their
+     * vectors are zeros, and they are not worth retrying: it is the file.
+     */
+    failed?: { index: number; message: string }[];
 }
 
 export interface Failed {

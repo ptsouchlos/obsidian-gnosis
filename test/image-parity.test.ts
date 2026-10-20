@@ -153,3 +153,152 @@ test("the plugin's CLIP vision tower reproduces the CLI's image vectors", option
     console.log(`image parity: ${files.length} images, lowest own-score ${lowest.toFixed(6)}`);
     assert.ok(lowest > 0.999, `an image re-embedded here should match its stored vector, got ${lowest}`);
 });
+
+/**
+ * Does an index the plugin builds with images match the CLI's?
+ *
+ * The vault is copied without its index and built from nothing by the
+ * plugin's own build command with the real models under node: the text model,
+ * and both CLIP towers. The comparison is against a CLI export of the same
+ * vault at the plugin's quantization and shard size:
+ *
+ *   gnosis export --quantize i8 --shard-docs 32 --out .gnosis/artifact-i8
+ *
+ * Which documents, kinds, titles and spaces the index holds are decided by
+ * gnosis's own code on both sides, so those must match exactly. The vectors
+ * come from two runtimes, so they are compared where they matter: the score
+ * every image gets for a text query, which should agree to within i8
+ * quantization, and in the same order.
+ */
+test("the plugin builds the image index the CLI built", options, async () => {
+    const { cpSync, existsSync, mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { basename, join } = await import("node:path");
+    const i8 = process.env["GNOSIS_PARITY_I8"] ?? ".gnosis/artifact-i8";
+    assert.ok(existsSync(join(vault!, i8, "manifest.json")), `no CLI export at ${i8}: gnosis export --quantize i8 --shard-docs 32 --out ${i8}`);
+
+    const copy = join(mkdtempSync(join(tmpdir(), "gnosis-parity-")), basename(vault!));
+    cpSync(vault!, copy, { recursive: true, preserveTimestamps: true });
+    rmSync(join(copy, ".gnosis"), { recursive: true, force: true });
+
+    const { default: GnosisPlugin } = await import("../src/main.js");
+    const { MemoryCheckpoints } = await import("../src/build/checkpoints.js");
+    const { AutoTokenizer, CLIPTextModelWithProjection, CLIPVisionModelWithProjection, RawImage, Tensor, pipeline } =
+        await import("@huggingface/transformers");
+    const app = new App(copy);
+    const plugin = new GnosisPlugin(app as never, { id: "gnosis", version: "parity" } as never);
+    await plugin.onload();
+    plugin.settings.searchImages = true;
+    plugin.checkpoints = new MemoryCheckpoints();
+    plugin.askConsent = async () => true;
+    plugin.confirmReplace = async () => true;
+
+    plugin.embedderFactory = async (model, pooling) => {
+        if (model.space === "image") {
+            const tokenizer = await AutoTokenizer.from_pretrained(model.repo, { revision: model.revision });
+            const clip = await CLIPTextModelWithProjection.from_pretrained(model.repo, {
+                revision: model.revision,
+                dtype: model.dtype,
+                subfolder: model.subfolder,
+                model_file_name: "model",
+            });
+            return {
+                embed: async (texts: string[]) => {
+                    const { text_embeds } = await clip(tokenizer(texts, { padding: true, truncation: true }));
+                    const unit = text_embeds.normalize(2, -1);
+                    const dim = unit.dims.at(-1)!;
+                    return texts.map((_, i) => Float32Array.from((unit.data as Float32Array).subarray(i * dim, (i + 1) * dim)));
+                },
+                dispose: () => {},
+            };
+        }
+        const extractor = await pipeline("feature-extraction", model.repo, {
+            revision: model.revision,
+            dtype: model.dtype,
+        });
+        return {
+            embed: async (texts: string[]) => {
+                const output = await extractor(texts, { pooling, normalize: true });
+                const dim = output.dims.at(-1)!;
+                const flat = output.data as Float32Array;
+                return texts.map((_, i) => Float32Array.from(flat.subarray(i * dim, (i + 1) * dim)));
+            },
+            dispose: () => {},
+        };
+    };
+    plugin.visionFactory = async (model) => {
+        const clip = await CLIPVisionModelWithProjection.from_pretrained(model.repo, {
+            revision: model.revision,
+            dtype: model.dtype,
+            subfolder: model.subfolder,
+            model_file_name: "model",
+        });
+        return {
+            embedImages: async (images: Uint8Array[]) => {
+                const vectors: Float32Array[] = [];
+                const failed = new Map<number, string>();
+                for (const [i, bytes] of images.entries()) {
+                    try {
+                        const decoded = (await RawImage.fromBlob(new Blob([bytes as BlobPart]))).rgba();
+                        const pixels = clipPixels(decoded.data, decoded.width, decoded.height);
+                        const { image_embeds } = await clip({ pixel_values: new Tensor("float32", pixels, [1, 3, 224, 224]) });
+                        vectors.push(Float32Array.from(image_embeds.normalize(2, -1).data as Float32Array));
+                    } catch (error) {
+                        failed.set(i, String(error));
+                        vectors.push(new Float32Array(512));
+                    }
+                }
+                return { vectors, failed };
+            },
+            dispose: () => {},
+        };
+    };
+
+    const started = Date.now();
+    await plugin.buildIndex();
+    const seconds = (Date.now() - started) / 1000;
+
+    const ours = await openArtifact(new App(copy) as never, ".gnosis/artifact");
+    const theirs = await openArtifact(new App(vault!) as never, i8);
+    const a = ours.info() as IndexInfo;
+    const b = theirs.info() as IndexInfo;
+    console.log(`image build: ${a.documents} documents, ${a.chunks} chunks in ${seconds.toFixed(1)} s (node, native ONNX Runtime)`);
+    assert.equal(a.documents, b.documents, "the same documents");
+    assert.equal(a.chunks, b.chunks, "the same chunks, title proxies included");
+    assert.deepEqual(
+        a.spaces.map(({ chunks: _c, ...s }) => s),
+        b.spaces.map(({ chunks: _c, ...s }) => s),
+        "the same spaces, models and prefixes",
+    );
+
+    // Image queries through the plugin's own text path, against both indexes.
+    const space = a.spaces.find((s) => s.space === "image")!;
+    const model = queryModelFor(space.queryModel)!;
+    const tokenizer = await AutoTokenizer.from_pretrained(model.repo, { revision: model.revision });
+    const clipText = await CLIPTextModelWithProjection.from_pretrained(model.repo, {
+        revision: model.revision,
+        dtype: model.dtype,
+        subfolder: model.subfolder,
+        model_file_name: "model",
+    });
+    let worst = 0;
+    for (const query of QUERIES) {
+        const { text_embeds } = await clipText(tokenizer([query], { padding: true, truncation: true }));
+        const vector = Float32Array.from(text_embeds.normalize(2, -1).data as Float32Array);
+        const query_ = new Map([["image", vector]]);
+        const mine = ours.search("", query_, 1000, undefined) as Hit[];
+        const reference = theirs.search("", query_, 1000, undefined) as Hit[];
+        // Two runtimes and i8 vectors: near-ties may swap, the leaders may not.
+        assert.deepEqual(
+            mine.slice(0, 3).map((h) => h.path),
+            reference.slice(0, 3).map((h) => h.path),
+            `"${query}": the same leaders in the same order`,
+        );
+        assert.deepEqual(new Set(mine.map((h) => h.path)), new Set(reference.map((h) => h.path)), `"${query}": the same documents`);
+        const theirScore = new Map(reference.map((h) => [h.path, h.score]));
+        const gap = Math.max(...mine.map((h) => Math.abs(h.score - theirScore.get(h.path)!)));
+        worst = Math.max(worst, gap);
+        assert.ok(gap < 0.02, `"${query}": scores differ by ${gap}`);
+    }
+    console.log(`image build: largest score difference from the CLI's index ${worst.toExponential(2)} over ${QUERIES.length} queries`);
+});

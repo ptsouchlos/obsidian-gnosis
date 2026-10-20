@@ -435,7 +435,7 @@ test("an index built with a model the plugin cannot run is left to the CLI", asy
 });
 
 test("the status line estimates time left once it has history", () => {
-    const base = { notesDone: 100, notesTotal: 1000, notesReused: 0, chunksEmbedded: 200 };
+    const base = { notesDone: 100, notesTotal: 1000, imagesDone: 0, imagesTotal: 0, notesReused: 0, chunksEmbedded: 200 };
     assert.equal(
         statusLine({ ...base, elapsedMs: 5_000 }),
         "Gnosis: indexing 100/1,000 notes · 200 chunks embedded",

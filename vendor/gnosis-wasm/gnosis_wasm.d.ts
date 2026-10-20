@@ -16,6 +16,14 @@ export class Builder {
      */
     addDocument(path: string, text: string, mtime_ms: number): any;
     /**
+     * Offer one image file to the index; needs `image` in the spec.
+     *
+     * `hash` is `contentHashBytes` of the file's bytes. A new image owes a
+     * vision-tower vector (`setImageVector`) and a title proxy
+     * (`setTitleVector`, with the `title` this returns).
+     */
+    addImage(path: string, hash: string, mtime_ms: number): any;
+    /**
      * A builder with nothing to reuse: every document will be embedded.
      */
     static create(spec: any): Builder;
@@ -40,6 +48,20 @@ export class Builder {
      * How many documents are waiting for vectors, for a progress report.
      */
     pendingCount(): number;
+    /**
+     * Drop a document that was offered but cannot be completed, such as an
+     * image that will not decode; `gnosis index` skips those too. Returns
+     * whether it was there.
+     */
+    removeDocument(path: string): boolean;
+    /**
+     * Supply an image's vector, from CLIP's vision tower.
+     */
+    setImageVector(path: string, vector: Float32Array): void;
+    /**
+     * Supply a document's title-proxy vector, from CLIP's text tower.
+     */
+    setTitleVector(path: string, vector: Float32Array): void;
     /**
      * Supply one document's vectors, flat and in chunk order.
      *
@@ -165,6 +187,11 @@ export function artifactFormatVersion(): number;
  */
 export function contentHash(text: string): string;
 
+/**
+ * The content hash `addImage` expects for an image file's bytes.
+ */
+export function contentHashBytes(bytes: Uint8Array): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -173,13 +200,18 @@ export interface InitOutput {
     readonly __wbg_index_free: (a: number, b: number) => void;
     readonly artifactFormatVersion: () => number;
     readonly builder_addDocument: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly builder_addImage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly builder_create: (a: number, b: number) => void;
     readonly builder_documentCount: (a: number, b: number) => void;
     readonly builder_finish: (a: number, b: number, c: number) => void;
     readonly builder_fromArtifact: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly builder_pendingCount: (a: number, b: number) => void;
+    readonly builder_removeDocument: (a: number, b: number, c: number, d: number) => void;
+    readonly builder_setImageVector: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly builder_setTitleVector: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly builder_setVectors: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly contentHash: (a: number, b: number, c: number) => void;
+    readonly contentHashBytes: (a: number, b: number, c: number) => void;
     readonly index_info: (a: number, b: number) => void;
     readonly index_lexicalSearch: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly index_open: (a: number, b: number, c: number, d: number) => void;

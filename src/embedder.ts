@@ -10,7 +10,7 @@
 import workerSource from "worker:./worker/embed-worker.ts";
 import gpuWorkerSource from "worker-gpu:./worker/embed-worker.ts";
 import { queryModelFor, type QueryModel } from "./models.js";
-import type { Device, EmbedRequest, LoadRequest, Response } from "./worker/protocol.js";
+import type { Device, EmbedImagesRequest, EmbedRequest, LoadRequest, Response } from "./worker/protocol.js";
 import type { SpaceInfo } from "./types.js";
 
 export type { Device } from "./worker/protocol.js";
@@ -27,6 +27,29 @@ export interface TextEmbedder {
     embed(texts: string[]): Promise<Float32Array[]>;
     dispose(): void;
 }
+
+/**
+ * Something that turns the bytes of image files into unit vectors, with the
+ * files that would not decode left out of them.
+ */
+export interface ImageEmbedder {
+    embedImages(images: Uint8Array[]): Promise<ImageVectors>;
+    dispose(): void;
+}
+
+export interface ImageVectors {
+    /** One per image, in order; a file that failed has a zero vector. */
+    vectors: Float32Array[];
+    /** The files that would not decode, by position, and why. */
+    failed: Map<number, string>;
+}
+
+/** Starts the vision tower on a device; swapped out in tests. */
+export type VisionFactory = (
+    model: QueryModel,
+    onProgress: (progress: DownloadProgress) => void,
+    device: Device,
+) => Promise<ImageEmbedder>;
 
 /** Starts an embedder for a model on a device; swapped out in tests. */
 export type EmbedderFactory = (
@@ -139,15 +162,39 @@ export const startWorkerEmbedder: EmbedderFactory = async (model, pooling, onPro
     return embedder;
 };
 
+/** The vision tower: CLIP's image encoder, in a worker, built for `device`. */
+export const startWorkerVision: VisionFactory = async (model, onProgress, device) => {
+    const embedder = new WorkerEmbedder(device === "webgpu" ? gpuWorkerSource : workerSource, onProgress);
+    const runtime = RUNTIMES[device];
+    try {
+        await embedder.request({
+            type: "load",
+            repo: model.repo,
+            revision: model.revision,
+            dtype: model.dtype,
+            subfolder: model.subfolder,
+            architecture: model.architecture,
+            pooling: model.pooling,
+            runtime: { url: runtime.url, sha256: runtime.sha256 },
+            device,
+            threads: device === "wasm" ? cpuThreads() : 1,
+        });
+    } catch (error) {
+        embedder.dispose();
+        throw error;
+    }
+    return embedder;
+};
+
 /** A request before the client numbers it. */
-type Unsent = Omit<LoadRequest, "id"> | Omit<EmbedRequest, "id">;
+type Unsent = Omit<LoadRequest, "id"> | Omit<EmbedRequest, "id"> | Omit<EmbedImagesRequest, "id">;
 
 interface Pending {
     resolve: (response: Response & { type: "done" }) => void;
     reject: (error: Error) => void;
 }
 
-class WorkerEmbedder implements TextEmbedder {
+class WorkerEmbedder implements TextEmbedder, ImageEmbedder {
     private readonly worker: Worker;
     private readonly url: string;
     private readonly pending = new Map<number, Pending>();
@@ -190,6 +237,19 @@ class WorkerEmbedder implements TextEmbedder {
             out.push(vectors.subarray(i * dim, (i + 1) * dim));
         }
         return out;
+    }
+
+    async embedImages(images: Uint8Array[]): Promise<ImageVectors> {
+        const done = await this.request({ type: "embedImages", images });
+        const { vectors, dim, failed } = done;
+        if (vectors === undefined || dim === undefined) {
+            throw new Error("the embedding worker returned no vectors");
+        }
+        const out: Float32Array[] = [];
+        for (let i = 0; i < images.length; i++) {
+            out.push(dim === 0 ? new Float32Array(0) : vectors.subarray(i * dim, (i + 1) * dim));
+        }
+        return { vectors: out, failed: new Map((failed ?? []).map((f) => [f.index, f.message])) };
     }
 
     dispose(): void {
