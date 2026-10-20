@@ -229,6 +229,17 @@ test("while the model is still loading, search answers with keywords", async () 
     assert.ok(after.some((t) => t.startsWith("Match ")), JSON.stringify(after));
 });
 
+test("a misspelled word still finds its note by keywords", async () => {
+    const { plugin } = await load({ factory: () => new Promise(() => {}) });
+    assert.equal(await plugin.enableSemanticSearch(), true);
+    search(plugin);
+    await waitFor("the search modal", () => openedModals.length > 0);
+
+    // "hydraton" is not in the vault; "hydration" is a title in it.
+    const hits = (await openedModals.at(-1)!.type("hydraton")) as Hit[];
+    assert.equal(hits[0]?.path, "notes/hydration.md", `got ${JSON.stringify(hits.map((h) => h.path))}`);
+});
+
 test("a model that fails to load says so and can be retried", async () => {
     let attempts = 0;
     const { plugin } = await load({
