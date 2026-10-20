@@ -59,6 +59,31 @@ export function scoreLine(hit: Hit, keywordShare: number | null): string {
 }
 
 /**
+ * What a related note's score says, in the search box's style: "82% similar".
+ * A related score is the mean of the two notes' best chunk-to-chunk
+ * similarities, so it has no keyword or title part to break out.
+ */
+export function relatedLine(hit: Hit, linked: boolean): string {
+    const line = `${percent(hit.score)} similar`;
+    return linked ? `${line} · linked` : line;
+}
+
+/**
+ * The paths a note shares a link with, either way: those it links to and
+ * those that link to it. `resolvedLinks` is Obsidian's map of source path to
+ * the paths it links to.
+ */
+export function linkedPaths(resolvedLinks: Record<string, Record<string, number>>, path: string): Set<string> {
+    const linked = new Set(Object.keys(resolvedLinks[path] ?? {}));
+    for (const [source, targets] of Object.entries(resolvedLinks)) {
+        if (path in targets) {
+            linked.add(source);
+        }
+    }
+    return linked;
+}
+
+/**
  * The note's date and tags, for the line under a snippet: "created
  * 2026-03-16 · #time/meeting". Empty when there is neither.
  *
