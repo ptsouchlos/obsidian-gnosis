@@ -1,5 +1,5 @@
 {
-  "format_version": 5,
+  "format_version": 6,
   "created_unix": 1700000400,
   "spaces": [
     {
@@ -34,7 +34,7 @@
   "shards": [
     {
       "name": "shard-0000.bin",
-      "hash": "e2d50567e005e25d49e5473430d674d4f33eb76ad4f99e0127c125707c7641e4",
+      "hash": "b729dde6f50427c1ca4a04f4ad1d40cb08f9644abe6d52c3a0f93aa74eedac02",
       "documents": 4,
       "chunks": 6
     }

@@ -327,8 +327,15 @@ export default class GnosisPlugin extends Plugin {
         if (this.index === null) {
             return;
         }
-        const base = this.index.searchConfig() as { dense_weight: number; title_boost: number };
-        this.index.setSearchConfig(withPresets(base, this.settings.strategy, this.settings.titleBonus));
+        const base = this.index.searchConfig() as {
+            dense_weight: number;
+            title_boost: number;
+            recency_weight: number;
+            recency_half_life_days: number;
+        };
+        this.index.setSearchConfig(
+            withPresets(base, this.settings.strategy, this.settings.titleBonus, this.settings.recency, Date.now()),
+        );
     }
 
     /** How pickers show and open results, as the settings say now. */

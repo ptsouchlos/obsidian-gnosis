@@ -18,7 +18,7 @@ export interface Hit {
     width: number | null;
     height: number | null;
     /** What `score` is made of; the three add up to it. Mirrors `search::ScoreParts`. */
-    parts: { meaning: number; keywords: number; title: number };
+    parts: { meaning: number; keywords: number; title: number; recency: number };
 }
 
 /** What a space's model is, as a client needs it to embed a query. */

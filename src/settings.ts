@@ -8,7 +8,7 @@ import { QUIET_MS } from "./auto-update.js";
 import { REPORT_PATH } from "./diagnostics.js";
 import type GnosisPlugin from "./main.js";
 import { DEFAULT_BUILD_MODEL, QUERY_MODELS } from "./models.js";
-import type { Strategy, TitleBonus } from "./ranking.js";
+import type { Recency, Strategy, TitleBonus } from "./ranking.js";
 import { stalenessLine } from "./staleness.js";
 import type { IndexStatus, ModelStatus } from "./status.js";
 import { segmented } from "./ui/segmented.js";
@@ -43,6 +43,8 @@ export interface GnosisSettings {
     strategy: Strategy;
     /** How much a note's title counts; see `ranking.ts`. */
     titleBonus: TitleBonus;
+    /** Whether a recently written note is lifted; see `ranking.ts`. */
+    recency: Recency;
     /** Where Cmd/Ctrl opens a result. A plain choice opens in the current tab. */
     modOpen: PaneType;
     /** The key hints under a picker's results. */
@@ -82,6 +84,7 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     buildModel: DEFAULT_BUILD_MODEL,
     strategy: "balanced",
     titleBonus: "default",
+    recency: "off",
     modOpen: "tab",
     keyboardHints: true,
     showScores: true,
@@ -324,6 +327,28 @@ export class GnosisSettingTab extends PluginSettingTab {
             },
         );
 
+        const recency = this.card(new Setting(containerEl))
+            .setName("Recency")
+            .setDesc(
+                "Lifts a recently written note, so \u201Cwhat was I reading about\u201D finds the latest. " +
+                    "It reads each note\u2019s created property; notes without one are not lifted. " +
+                    "Rebuild the index after turning it on for the first time.",
+            );
+        segmented<Recency>(
+            recency.controlEl,
+            "Recency",
+            [
+                { value: "off", label: "Off" },
+                { value: "on", label: "On" },
+            ],
+            this.plugin.settings.recency,
+            async (value) => {
+                this.plugin.settings.recency = value;
+                await this.saveRanking();
+                drawSearch();
+            },
+        );
+
         this.card(new Setting(containerEl))
             .setName("Results")
             .setDesc("How many results each search shows.")
@@ -550,6 +575,8 @@ export class GnosisSettingTab extends PluginSettingTab {
         ).addClass("is-accent");
         arrow();
         step(el, "Title bonus", settings.titleBonus === "off", settings.titleBonus === "off" ? "off" : "on");
+        arrow();
+        step(el, "Recency", settings.recency === "off", settings.recency === "off" ? "off" : "on");
         arrow();
         step(el, "Results");
     }
