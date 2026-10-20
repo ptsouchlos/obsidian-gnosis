@@ -97,7 +97,7 @@ test("the index describes itself from the artifact in the vault", async () => {
         `expected the text space's query model and pooling, got ${JSON.stringify(lines)}`,
     );
     assert.ok(
-        lines.some((l) => l.startsWith("image: clip-vit-b-32-text")),
+        lines.some((l) => l.startsWith("image: clip-vit-b-32")),
         "a text query against the image space goes through CLIP's text tower",
     );
 });

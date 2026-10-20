@@ -80,6 +80,8 @@ export default class GnosisPlugin extends Plugin {
     override settings: GnosisSettings = DEFAULT_SETTINGS;
     private index: Index | null = null;
     private embedder: EmbedderState | null = null;
+    /** CLIP's text tower, when images are searched: a second model beside the text one. */
+    private imageEmbedder: EmbedderState | null = null;
 
     /** How an embedder is started; tests replace the worker with a stand-in. */
     embedderFactory: EmbedderFactory = startWorkerEmbedder;
@@ -406,7 +408,8 @@ export default class GnosisPlugin extends Plugin {
         };
 
         const space = this.settings.semanticSearch ? this.semanticSpace(index) : null;
-        if (space === null) {
+        const imageSpace = this.settings.searchImages ? this.imageSpace(index) : null;
+        if (space === null && imageSpace === null) {
             new LexicalSearchModal(this.app, this.display(true), lexical, notify).open();
             return;
         }
@@ -415,19 +418,38 @@ export default class GnosisPlugin extends Plugin {
         // restart the model is cached but not loaded. Unattended: opening the
         // search box never downloads the GPU runtime.
         void this.chooseDevice(true)
-            .then((device) => this.startEmbedder(space, device))
+            .then((device) =>
+                Promise.all([
+                    space === null ? null : this.startEmbedder(space, device),
+                    imageSpace === null ? null : this.startEmbedder(imageSpace, device),
+                ]),
+            )
             .catch(() => {});
         new SemanticSearchModal(
             this.app,
             this.display(),
             async (query) => {
-                const embedder = this.embedder?.ready ?? null;
-                if (embedder === null) {
-                    // Keywords alone while the model loads, scored on their scale.
+                const text = space === null ? null : (this.embedder?.ready ?? null);
+                const image = imageSpace === null ? null : (this.imageEmbedder?.ready ?? null);
+                if (text === null && image === null) {
+                    // Keywords alone while the models load, scored on their scale.
                     return { hits: lexical(query), keywordShare: this.display(true).keywordShare };
                 }
                 try {
-                    const vectors = await queryVectors(embedder, space, query);
+                    // One vector per space whose model is ready; a space
+                    // without one is not searched, and the notes still are
+                    // by keyword.
+                    const vectors = new Map<string, Float32Array>();
+                    if (text !== null && space !== null) {
+                        for (const [name, vector] of await queryVectors(text, space, query)) {
+                            vectors.set(name, vector);
+                        }
+                    }
+                    if (image !== null && imageSpace !== null) {
+                        for (const [name, vector] of await queryVectors(image, imageSpace, query)) {
+                            vectors.set(name, vector);
+                        }
+                    }
                     const hits = index.search(query, vectors, this.settings.limit, undefined) as Hit[];
                     return { hits, keywordShare: null };
                 } catch (error) {
@@ -436,7 +458,7 @@ export default class GnosisPlugin extends Plugin {
                     return { hits: [], keywordShare: null };
                 }
             },
-            this.embedder?.ready != null,
+            this.embedder?.ready != null || this.imageEmbedder?.ready != null,
             notify,
         ).open();
     }
@@ -457,6 +479,56 @@ export default class GnosisPlugin extends Plugin {
             return null;
         }
         return space ?? null;
+    }
+
+    /**
+     * The index's image space, if CLIP's text tower can query it.
+     *
+     * Silent when the index has no images: the setting is about the reader's
+     * images, and a vault without any is not an error.
+     */
+    private imageSpace(index: Index): SpaceInfo | null {
+        const info = index.info() as IndexInfo;
+        const space = info.spaces.find((s) => s.space === "image");
+        if (space === undefined) {
+            return null;
+        }
+        if (queryModelFor(space.queryModel)?.space !== "image") {
+            new Notice(
+                `Gnosis: image search does not support '${space.queryModel}' yet — notes are still searched`,
+                8000,
+            );
+            return null;
+        }
+        return space;
+    }
+
+    /**
+     * Turn image search on, if the reader agrees to the download.
+     *
+     * One switch covers every model images need, so the prompt names them
+     * all up front. Returns whether it is now on.
+     */
+    async enableImageSearch(): Promise<boolean> {
+        const device = await this.chooseDevice(false);
+        const clip = queryModelFor(CLIP_MODEL)!;
+        if (!(await this.askConsent(downloadsFor(CLIP_MODEL, clip, RUNTIMES[device], device)))) {
+            return false;
+        }
+        this.settings.searchImages = true;
+        await this.saveSettings();
+        const index = await this.withIndex();
+        const space = index === null ? null : this.imageSpace(index);
+        if (space !== null) {
+            this.startEmbedder(space, device).catch(() => {});
+        }
+        return true;
+    }
+
+    async disableImageSearch(): Promise<void> {
+        this.settings.searchImages = false;
+        await this.saveSettings();
+        this.stopEmbedder("image");
     }
 
     /**
@@ -529,10 +601,12 @@ export default class GnosisPlugin extends Plugin {
      */
     private startEmbedder(space: SpaceInfo, device: Device, quiet = false): Promise<TextEmbedder> {
         const key = embedderKey(space, device);
-        if (this.embedder?.key === key) {
-            return this.embedder.starting;
+        const slot = space.space === "image" ? "imageEmbedder" : "embedder";
+        const current = this[slot];
+        if (current?.key === key) {
+            return current.starting;
         }
-        this.stopEmbedder();
+        this.stopEmbedder(space.space === "image" ? "image" : "text");
 
         const model = queryModelFor(space.queryModel);
         if (model === null) {
@@ -550,7 +624,7 @@ export default class GnosisPlugin extends Plugin {
             device,
         );
         const state: EmbedderState = { key, device, starting, ready: null };
-        this.embedder = state;
+        this[slot] = state;
         this.embedderError = null;
         this.statusChanged();
         const load: ModelLoadRecord = {
@@ -567,7 +641,7 @@ export default class GnosisPlugin extends Plugin {
                 load.outcome = "loaded";
                 load.durationMs = this.diagnostics.now() - load.startedAt;
                 this.diagnostics.record("model", `loaded ${key} in ${load.durationMs} ms`);
-                if (this.embedder === state) {
+                if (this[slot] === state) {
                     state.ready = embedder;
                     this.statusChanged();
                 } else {
@@ -582,8 +656,8 @@ export default class GnosisPlugin extends Plugin {
                 load.durationMs = this.diagnostics.now() - load.startedAt;
                 load.error = describe(error);
                 this.diagnostics.record("error", `could not load ${key}: ${describe(error)}`);
-                if (this.embedder === state) {
-                    this.embedder = null;
+                if (this[slot] === state) {
+                    this[slot] = null;
                     this.embedderError = describe(error);
                     this.statusChanged();
                 }
@@ -593,9 +667,16 @@ export default class GnosisPlugin extends Plugin {
         return starting;
     }
 
-    private stopEmbedder(): void {
-        this.embedder?.ready?.dispose();
-        this.embedder = null;
+    /** Stop the text model, the image model, or (the default) both. */
+    private stopEmbedder(which: "text" | "image" | "both" = "both"): void {
+        if (which !== "image") {
+            this.embedder?.ready?.dispose();
+            this.embedder = null;
+        }
+        if (which !== "text") {
+            this.imageEmbedder?.ready?.dispose();
+            this.imageEmbedder = null;
+        }
         this.statusChanged();
     }
 
@@ -627,11 +708,16 @@ export default class GnosisPlugin extends Plugin {
         const { id, dim } = await this.currentModel();
         const model = queryModelFor(id);
         const held = model === null ? null : await this.modelStore.held(model, RUNTIME_URLS).catch(() => null);
+        // CLIP's text tower is held beside it once images are searched: the
+        // card counts it, so the size shown is what Delete will free.
+        const clip = queryModelFor(CLIP_MODEL)!;
+        const clipHeld = await this.modelStore.held(clip, []).catch(() => null);
+        const clipBytes = clipHeld?.modelBytes ?? 0;
         return modelStatus({
             modelId: id,
             dim,
             supported: model !== null,
-            heldBytes: held === null ? null : held.modelBytes + held.runtimeBytes,
+            heldBytes: held === null ? null : held.modelBytes + held.runtimeBytes + clipBytes,
             complete: held?.modelComplete ?? false,
             // What a first use here would download: the runtime for this device.
             downloadBytes: (model?.downloadBytes ?? 0) + RUNTIMES[await this.chooseDevice(false)].bytes,
@@ -659,9 +745,9 @@ export default class GnosisPlugin extends Plugin {
             return;
         }
         const agreed = await this.confirmDelete([
-            `This removes ${id} and ONNX Runtime from this device. Your index is not affected, and ` +
+            `This removes ${id}, the image model CLIP if it is downloaded, and ONNX Runtime from this device. Your index is not affected, and ` +
                 "keyword search and related notes keep working.",
-            "Semantic search is turned off. Turning it back on, or building an index, downloads the " +
+            "Semantic search and image search are turned off. Turning them back on, or building an index, downloads the " +
                 "model again. Another plugin that uses the same model downloads it again too.",
         ]);
         if (!agreed) {
@@ -673,7 +759,13 @@ export default class GnosisPlugin extends Plugin {
             this.settings.semanticSearch = false;
             await this.saveSettings();
         }
-        const freed = await this.modelStore.remove(model, RUNTIME_URLS);
+        if (this.settings.searchImages) {
+            this.settings.searchImages = false;
+            await this.saveSettings();
+        }
+        const clip = queryModelFor(CLIP_MODEL)!;
+        const freedClip = await this.modelStore.remove(clip, []);
+        const freed = (await this.modelStore.remove(model, RUNTIME_URLS)) + freedClip;
         new Notice(`Gnosis: deleted the model — ${megabytes(freed)} freed`);
         this.statusChanged();
     }
@@ -1280,6 +1372,9 @@ function platformName(): string {
 
 /** Every ONNX Runtime build Gnosis may keep, for the model card and Delete. */
 const RUNTIME_URLS = [RUNTIMES.wasm.url, RUNTIMES.webgpu.url];
+
+/** The model that answers text queries against the image space. */
+const CLIP_MODEL = "clip-vit-b-32";
 
 function embedderKey(space: SpaceInfo, device: Device): string {
     return `${space.queryModel}/${space.pooling}/${device}`;

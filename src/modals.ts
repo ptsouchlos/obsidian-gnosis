@@ -3,7 +3,7 @@
 import { Keymap, Notice, Platform, SuggestModal, getAllTags } from "obsidian";
 import type { App, PaneType, TFile } from "obsidian";
 import type { Hit } from "./types.js";
-import { hitSnippet, hitSubtitle, metaLine, noteName, resolveHit, scoreLine } from "./results.js";
+import { hitSnippet, hitSubtitle, isImage, metaLine, noteName, resolveHit, scoreLine } from "./results.js";
 
 /** How results are shown and opened, read when a picker opens. */
 export interface Display {
@@ -93,6 +93,11 @@ abstract class HitModal extends SuggestModal<Hit> {
     }
 
     override renderSuggestion(hit: Hit, el: HTMLElement): void {
+        const thumbnail = this.thumbnail(hit);
+        if (thumbnail !== null) {
+            el.addClass("gnosis-hit-has-thumb");
+            el.appendChild(thumbnail);
+        }
         el.createEl("div", { cls: "gnosis-hit-title", text: noteName(hit) });
         el.createEl("div", { cls: "gnosis-hit-detail", text: `› ${hitSubtitle(hit)}` });
         const snippet = hitSnippet(hit);
@@ -113,6 +118,25 @@ abstract class HitModal extends SuggestModal<Hit> {
             // poor match; then what made it.
             el.createEl("div", { cls: "gnosis-hit-scores", text: scoreLine(hit, this.keywordShare()) });
         }
+    }
+
+    /** The image itself at a glance, from the vault's own file; null for a note. */
+    private thumbnail(hit: Hit): HTMLElement | null {
+        if (!isImage(hit)) {
+            return null;
+        }
+        const file = resolveHit(this.app, hit);
+        if (file === null) {
+            return null;
+        }
+        return createEl("img", {
+            cls: "gnosis-hit-thumb",
+            attr: {
+                src: this.app.vault.getResourcePath(file),
+                alt: noteName(hit),
+                loading: "lazy",
+            },
+        });
     }
 
     override onChooseSuggestion(hit: Hit, evt?: MouseEvent | KeyboardEvent): void {

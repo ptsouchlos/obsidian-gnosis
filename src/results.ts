@@ -107,6 +107,16 @@ export function metaLine(created: unknown, mtime: number | null, tags: readonly 
     return parts.join(" · ");
 }
 
+/**
+ * Whether a hit is an image, by its file extension.
+ *
+ * Not by `width` and `height`: an exported artifact does not carry them, so
+ * they are null for every hit it returns, images included.
+ */
+export function isImage(hit: Hit): boolean {
+    return /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(hit.path);
+}
+
 /** A one-line locator for a hit: its heading trail, or its folder. */
 export function hitSubtitle(hit: Hit): string {
     if (hit.heading_path !== "") {

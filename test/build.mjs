@@ -32,6 +32,7 @@ await esbuild.build({
         "test/semantic.test.ts",
         "test/build.test.ts",
         "test/parity.test.ts",
+        "test/image-parity.test.ts",
         "test/real-vault.test.ts",
         "test/layout.test.ts",
         "test/diagnostics.test.ts",

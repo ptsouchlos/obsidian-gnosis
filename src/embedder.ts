@@ -124,6 +124,8 @@ export const startWorkerEmbedder: EmbedderFactory = async (model, pooling, onPro
             repo: model.repo,
             revision: model.revision,
             dtype: model.dtype,
+            subfolder: model.subfolder,
+            architecture: model.architecture,
             pooling,
             runtime: { url: runtime.url, sha256: runtime.sha256 },
             device,

@@ -519,3 +519,24 @@
         transition: none;
     }
 }
+
+/* An image result: its thumbnail beside the title, at most 96px on a side. */
+.suggestion-item.gnosis-hit-has-thumb {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	column-gap: var(--size-4-3);
+}
+
+.gnosis-hit-thumb {
+	grid-row: 1 / span 5;
+	align-self: start;
+	max-width: 96px;
+	max-height: 96px;
+	object-fit: contain;
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+}
+
+.gnosis-hit-has-thumb > :not(.gnosis-hit-thumb) {
+	grid-column: 2;
+}
