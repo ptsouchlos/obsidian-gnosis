@@ -220,6 +220,7 @@ export class App {
     readonly metadataCache = {
         isUserIgnored: (path: string): boolean => this.excluded.some((prefix) => path.startsWith(prefix)),
         getFileCache: (file: TFile) => this.fileCaches.get(file.path) ?? null,
+        resolvedLinks: {} as Record<string, Record<string, number>>,
     };
     /** Links as Obsidian writes them with wikilinks on. */
     readonly fileManager = {

@@ -16,7 +16,7 @@ import test from "node:test";
 import { App, notices, openedModals } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
 import { RelatedFollower } from "../src/related/follow.js";
-import { formatScore, metaLine, scoreLine } from "../src/results.js";
+import { formatScore, linkedPaths, metaLine, relatedLine, scoreLine } from "../src/results.js";
 import type { Hit } from "../src/types.js";
 
 /** The fixture vault's absolute path, injected by `test/build.mjs`. */
@@ -226,6 +226,19 @@ test("the score line says what a score is made of", () => {
     assert.equal(scoreLine(keywords, 0.1), "Keywords 32% · title +0.00");
     // The bonus can lift a score past 1; a percentage cannot pass 100.
     assert.match(scoreLine({ score: 1.05, parts: { meaning: 0.9, keywords: 0.05, title: 0.1 } } as Hit, null), /^Match 100%/);
+});
+
+test("the related line says how similar, and whether the note is already linked", () => {
+    const hit = { score: 0.8249 } as Hit;
+    assert.equal(relatedLine(hit, false), "82% similar");
+    assert.equal(relatedLine(hit, true), "82% similar · linked");
+    assert.match(relatedLine({ score: 1.2 } as Hit, false), /^100% similar/);
+});
+
+test("linked notes are the ones a note links to and the ones that link to it", () => {
+    const links = { "a.md": { "b.md": 1 }, "c.md": { "a.md": 2 }, "d.md": { "e.md": 1 } };
+    assert.deepEqual([...linkedPaths(links, "a.md")].sort(), ["b.md", "c.md"]);
+    assert.deepEqual([...linkedPaths(links, "z.md")], []);
 });
 
 test("the metadata line prefers a created property, and keeps a few tags", () => {

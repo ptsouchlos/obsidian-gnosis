@@ -8,7 +8,7 @@ import { ItemView, Menu, setIcon } from "obsidian";
 import type { TFile, WorkspaceLeaf } from "obsidian";
 import type GnosisPlugin from "../main.js";
 import { paneFor } from "../modals.js";
-import { formatScore, hitSnippet, noteName, resolveHit } from "../results.js";
+import { formatScore, hitSnippet, linkedPaths, noteName, relatedLine, resolveHit } from "../results.js";
 import type { Hit } from "../types.js";
 import { RelatedFollower, type RelatedState } from "./follow.js";
 import { mapLayout, type MapPoint } from "./layout.js";
@@ -226,7 +226,7 @@ export class RelatedView extends ItemView {
             case "ready": {
                 const points = state.pairs === null ? null : mapLayout(state.hits.map((h) => h.score), state.pairs);
                 const dots = points === null ? null : this.drawMap(state.path, state.hits, points);
-                const rows = this.drawList(state.hits);
+                const rows = this.drawList(state.path, state.hits);
                 if (dots !== null) {
                     linkHover(dots, rows);
                 }
@@ -276,8 +276,13 @@ export class RelatedView extends ItemView {
         });
     }
 
-    private drawList(hits: Hit[]): HTMLElement[] {
+    private drawList(path: string, hits: Hit[]): HTMLElement[] {
         const list = this.bodyEl.createDiv({ cls: "gnosis-related-list" });
+        // Only worth the walk when linked notes can be in the list at all.
+        const linked = this.plugin.settings.relatedIncludeLinked
+            ? linkedPaths(this.app.metadataCache.resolvedLinks, path)
+            : new Set<string>();
+        const showScores = this.plugin.settings.showScores;
         return hits.map((hit) => {
             const row = list.createDiv({ cls: "gnosis-related-row" });
             const line = row.createDiv({ cls: "gnosis-related-line" });
@@ -286,7 +291,12 @@ export class RelatedView extends ItemView {
                 attr: { "aria-label": "Show why", "aria-expanded": "false" },
             });
             setIcon(toggle, "chevron-right");
-            line.createSpan({ cls: "gnosis-hit-score", text: formatScore(hit.score) });
+            const scoreText = relatedLine(hit, linked.has(hit.path));
+            if (showScores) {
+                line.createSpan({ cls: "gnosis-hit-score", text: scoreText, attr: { "aria-label": scoreText } });
+            } else if (linked.has(hit.path)) {
+                line.createSpan({ cls: "gnosis-hit-score", text: "linked" });
+            }
             const link = line.createEl("a", { cls: "gnosis-related-link", text: noteName(hit), href: "#" });
             link.addEventListener("click", (evt) => {
                 evt.preventDefault();
@@ -301,12 +311,14 @@ export class RelatedView extends ItemView {
                 }
             });
 
+            // Where the match is: the best chunk's heading trail, as in the search box.
+            if (hit.heading_path !== "") {
+                row.createDiv({ cls: "gnosis-hit-detail gnosis-related-where", text: hit.heading_path });
+            }
+
             // Why it is related: the passage that matched, under its heading.
             const detail = row.createDiv({ cls: "gnosis-related-detail" });
             detail.hide();
-            if (hit.heading_path !== "") {
-                detail.createDiv({ cls: "gnosis-hit-detail", text: hit.heading_path });
-            }
             detail.createDiv({ cls: "gnosis-related-snippet", text: hitSnippet(hit, 400) });
             toggle.addEventListener("click", () => {
                 const open = !detail.isShown();
