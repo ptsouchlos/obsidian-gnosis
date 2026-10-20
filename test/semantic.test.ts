@@ -19,7 +19,7 @@ import { RUNTIMES, queryVectors, unsupportedReason, type EmbedderFactory, type T
 import { MemoryModelStore } from "../src/model-store.js";
 import type { QueryModel } from "../src/models.js";
 import { modelStatus } from "../src/status.js";
-import { isImage, thumbnailSize } from "../src/results.js";
+import { isImage } from "../src/results.js";
 import type { Hit, SpaceInfo } from "../src/types.js";
 
 declare const GNOSIS_TEST_VAULT: string;
@@ -498,12 +498,8 @@ test("deleting the model removes CLIP too, and turns image search off", async ()
     assert.deepEqual([...store.held_], [], "both models are gone");
 });
 
-test("a hit is an image when it has pixel dimensions, and a thumbnail keeps its proportions", () => {
-    const note = { width: null, height: null } as Hit;
-    const photo = { width: 4000, height: 3000 } as Hit;
-    assert.equal(isImage(note), false);
-    assert.equal(isImage(photo), true);
-    assert.deepEqual(thumbnailSize(4000, 3000), { width: 96, height: 72 });
-    assert.deepEqual(thumbnailSize(40, 30), { width: 40, height: 30 }, "never enlarged");
-    assert.deepEqual(thumbnailSize(0, 0), { width: 1, height: 1 });
+test("a hit is an image by its extension, since an exported artifact carries no dimensions", () => {
+    assert.equal(isImage({ path: "notes/loaf.PNG", width: null, height: null } as Hit), true);
+    assert.equal(isImage({ path: "a/b.webp", width: null, height: null } as Hit), true);
+    assert.equal(isImage({ path: "notes/png.md", width: null, height: null } as Hit), false);
 });

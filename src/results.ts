@@ -107,15 +107,14 @@ export function metaLine(created: unknown, mtime: number | null, tags: readonly 
     return parts.join(" · ");
 }
 
-/** Whether a hit is an image: only images carry pixel dimensions. */
+/**
+ * Whether a hit is an image, by its file extension.
+ *
+ * Not by `width` and `height`: an exported artifact does not carry them, so
+ * they are null for every hit it returns, images included.
+ */
 export function isImage(hit: Hit): boolean {
-    return hit.width !== null && hit.height !== null;
-}
-
-/** The size to draw an image hit at: its own proportions, the long side at most `max`. */
-export function thumbnailSize(width: number, height: number, max = 96): { width: number; height: number } {
-    const scale = Math.min(1, max / Math.max(width, height, 1));
-    return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+    return /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(hit.path);
 }
 
 /** A one-line locator for a hit: its heading trail, or its folder. */

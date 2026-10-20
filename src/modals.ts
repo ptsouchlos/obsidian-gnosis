@@ -3,7 +3,7 @@
 import { Keymap, Notice, Platform, SuggestModal, getAllTags } from "obsidian";
 import type { App, PaneType, TFile } from "obsidian";
 import type { Hit } from "./types.js";
-import { hitSnippet, hitSubtitle, isImage, metaLine, noteName, resolveHit, scoreLine, thumbnailSize } from "./results.js";
+import { hitSnippet, hitSubtitle, isImage, metaLine, noteName, resolveHit, scoreLine } from "./results.js";
 
 /** How results are shown and opened, read when a picker opens. */
 export interface Display {
@@ -129,14 +129,11 @@ abstract class HitModal extends SuggestModal<Hit> {
         if (file === null) {
             return null;
         }
-        const { width, height } = thumbnailSize(hit.width!, hit.height!);
         return createEl("img", {
             cls: "gnosis-hit-thumb",
             attr: {
                 src: this.app.vault.getResourcePath(file),
                 alt: noteName(hit),
-                width: String(width),
-                height: String(height),
                 loading: "lazy",
             },
         });
