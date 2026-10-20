@@ -32,6 +32,9 @@ shows what comes back.
   index was built with and fused with the keyword channel, by gnosis's own
   ranking code. While the model loads, search answers with keywords and says
   so.
+- A word the index has never seen is also matched to the words a typo or two
+  away ("hydraton" finds "hydration"), at half weight, so an exact match
+  always ranks first. This works in keyword search too.
 - Turning it on asks first, and lists what it downloads: the model's files
   from Hugging Face at the revision the gnosis CLI uses (bge-small-en-v1.5:
   134 MB; multilingual-e5-small: 487 MB), and ONNX Runtime's WebAssembly engine
