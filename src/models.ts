@@ -31,7 +31,7 @@ export interface QueryModel {
     /// tokens; CLIP's text tower is projected into the image space instead,
     /// whatever pooling its index records (measured against the CLI: the
     /// projection reproduces its scores to 2e-7, mean pooling does not).
-    architecture: "encoder" | "clip-text";
+    architecture: "encoder" | "clip-text" | "clip-vision";
     /// Where the ONNX file sits in the repository: transformers.js looks in
     /// `onnx/`, and an export that keeps it at the root says so with "".
     subfolder: "onnx" | "";
@@ -80,6 +80,27 @@ export const QUERY_MODELS: Readonly<Record<string, QueryModel>> = {
         documentPrefix: "passage: ",
         label: "multilingual-e5-small — 100 languages, 487 MB",
     },
+    // The image space's vision tower, which embeds the images themselves when
+    // the plugin builds an index. Keyed by the id the CLI records for the
+    // space's model (`clip-vit-b-32`) with the tower named, since both towers
+    // share it; the vectors it makes are CLIP's, unit length, 512d. Files are
+    // fastembed's own (`Qdrant/clip-ViT-B-32-vision`).
+    "clip-vit-b-32-vision": {
+        repo: "Qdrant/clip-ViT-B-32-vision",
+        revision: "e0c24ed0fa57fa3e4f97f30de74c51d944036ace",
+        dtype: "fp32",
+        space: "image",
+        architecture: "clip-vision",
+        subfolder: "",
+        // model.onnx 352 MB, preprocessing and model configs.
+        downloadBytes: 352_000_000,
+        pooling: "mean",
+        dim: 512,
+        queryPrefix: "",
+        documentPrefix: "",
+        label: "clip-vit-b-32 vision — images, 352 MB",
+    },
+
     // The image space's query tower: CLIP's text encoder, which lands a text
     // query among the vectors its vision encoder gave the images. The files
     // are fastembed's own (`Qdrant/clip-ViT-B-32-text`).

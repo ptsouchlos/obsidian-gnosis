@@ -24,6 +24,7 @@ import { App } from "./stubs/obsidian.js";
 import { openArtifact } from "../src/artifact.js";
 import { queryModelFor } from "../src/models.js";
 import { queryVectors } from "../src/embedder.js";
+import { clipPixels } from "../src/worker/preprocess.js";
 import type { Hit, IndexInfo } from "../src/types.js";
 
 const vault = process.env["GNOSIS_PARITY_VAULT"];
@@ -94,4 +95,61 @@ test("the plugin's CLIP text tower scores images as the CLI does", options, asyn
         assert.ok(gap < 1e-4, `"${query}": scores differ by ${gap}`);
     }
     console.log(`image parity: worst agreement ${worst.toFixed(6)} over ${QUERIES.length} queries`);
+});
+
+/**
+ * Does the plugin's vision tower reproduce the vectors the CLI stored for the
+ * images themselves?
+ *
+ * Each image under the vault is embedded here and used as a dense-only query
+ * against the image space: if preprocessing (decode, resize, crop,
+ * normalize) matches fastembed's, the image's own document comes back first
+ * with a cosine of ~1. Preprocessing differences show up here first.
+ */
+test("the plugin's CLIP vision tower reproduces the CLI's image vectors", options, async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { join, relative } = await import("node:path");
+    const index = await openArtifact(new App(vault!) as never, ".gnosis/artifact");
+    const info = index.info() as IndexInfo;
+    const space = info.spaces.find((s) => s.space === "image")!;
+    const vision = queryModelFor("clip-vit-b-32-vision");
+    assert.ok(vision, "no vision model is registered");
+
+    const { CLIPVisionModelWithProjection, RawImage, Tensor } = await import("@huggingface/transformers");
+    const clip = await CLIPVisionModelWithProjection.from_pretrained(vision.repo, {
+        revision: vision.revision,
+        dtype: vision.dtype,
+        subfolder: vision.subfolder,
+        model_file_name: "model",
+    });
+
+    const files: string[] = [];
+    const walk = (dir: string) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            if (entry.name.startsWith(".")) continue;
+            const full = join(dir, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(entry.name)) files.push(full);
+        }
+    };
+    walk(vault!);
+    assert.ok(files.length > 0, "the vault has no images");
+
+    let lowest = 1;
+    for (const file of files) {
+        const decoded = (await RawImage.fromBlob(new Blob([readFileSync(file)]))).rgba();
+        const pixels = clipPixels(decoded.data, decoded.width, decoded.height);
+        const { image_embeds } = await clip({ pixel_values: new Tensor("float32", pixels, [1, 3, 224, 224]) });
+        const vector = Float32Array.from(image_embeds.normalize(2, -1).data as Float32Array);
+        assert.equal(vector.length, space.dim);
+        const own = relative(vault!, file);
+        const ranked = index.search("", new Map([["image", vector]]), 1000, undefined) as Hit[];
+        const hit = ranked.find((h) => h.path === own);
+        assert.ok(hit, `${own} is not in the index`);
+        lowest = Math.min(lowest, hit.score);
+        console.log(`  ${own}: ${hit.score.toFixed(4)}`);
+        assert.equal(ranked[0]!.path, own, `${own}: the top hit is ${ranked[0]!.path}`);
+    }
+    console.log(`image parity: ${files.length} images, lowest own-score ${lowest.toFixed(6)}`);
+    assert.ok(lowest > 0.999, `an image re-embedded here should match its stored vector, got ${lowest}`);
 });

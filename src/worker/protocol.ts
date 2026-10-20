@@ -19,7 +19,7 @@ export interface LoadRequest {
     /** "onnx" or "": where the ONNX file sits in the repository. */
     subfolder: string;
     /** "clip-text" loads CLIP's text tower and projects; "encoder" pools a sentence encoder. */
-    architecture: "encoder" | "clip-text";
+    architecture: "encoder" | "clip-text" | "clip-vision";
     pooling: "cls" | "mean";
     runtime: RuntimeSpec;
     /** Where the model runs. "webgpu" only in the GPU worker, with its runtime. */
