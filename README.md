@@ -144,59 +144,6 @@ community-plugin channel ships only `main.js`, `manifest.json` and
 `styles.css`. The only network access is the consented download above: the
 plugin fetches no JavaScript at run time.
 
-## Tests
-
-Three suites, each answering something the others cannot:
-
-- `test/plugin.test.ts` — the plugin's own logic against a committed fixture
-  vault and a real artifact: lazy loading, the commands, resolving a hit back
-  to a file, and what it says when a note in the index is gone from the vault.
-  Obsidian's API is stubbed in `test/stubs/obsidian.ts`; the WebAssembly module
-  and the artifact are real.
-- `test/bundle.test.cjs` — the shipped `main.js`: bundled, minified, CommonJS,
-  with the `.wasm` inlined, required the way Obsidian requires it. This is
-  where a bundler mistake shows up instead of in a user's console.
-- `test/semantic.test.ts` — semantic search with the model replaced by a
-  stand-in that records its inputs: consent before any download, the index's
-  own query prefix applied, the keyword fallback while the model loads, and
-  what it says when the model cannot load or the index's model is unsupported.
-  The WebAssembly module and its hybrid ranking are real.
-- `test/build.test.ts` — *Build index* against copies of the fixture vault,
-  with a deterministic stand-in model so a test can see exactly what was
-  embedded: a fresh build, an unchanged rebuild that writes nothing, an edit
-  that re-embeds one note, a deletion, cancel-and-resume with nothing embedded
-  twice, checkpoints mid-build, and the two-writers prompt — including another
-  writer replacing the index *during* a build.
-- `test/parity.test.ts` — the real model, against vectors the gnosis CLI
-  stored: each chunk's exact embedding input is re-embedded with the files
-  `src/models.ts` names and must find its own document with a cosine of ~1.
-  A second test builds the same vault from nothing through *Build index* and
-  compares it with a CLI export byte for byte. Skipped unless pointed at a
-  vault exported both ways (`gnosis export --quantize f32 --out
-  .gnosis/artifact` and `--quantize i8 --out .gnosis/artifact-i8`), indexed
-  with images off — the plugin builds notes only, so an image would be one
-  document the two sides disagree on:
-  `GNOSIS_PARITY_VAULT=/path/to/vault npm test`. Downloads the model.
-- `test/image-parity.test.ts` — CLIP's text tower, against the CLI: each query
-  must score every image as `gnosis search --in image` does, in the same
-  order. Skipped unless pointed at a vault with images, indexed and exported
-  with f32 vectors (`GNOSIS_PARITY_VAULT=/path/to/vault npm test`, `gnosis` on
-  the PATH, `GNOSIS_FASTEMBED_CACHE` to reuse the CLI's model cache). It also
-  checks the vision tower against the CLI's image vectors (every image must
-  find itself, above 0.999) and that an index built here with images has the
-  documents, chunks and spaces of the CLI's (`--quantize i8 --shard-docs 32
-  --out .gnosis/artifact-i8`), with image-query scores within i8 noise.
-- `test/images-build.test.ts` — building with images, both CLIP towers
-  replaced by stand-ins: the image space and title proxies, an undecodable file
-  skipped, an unchanged rebuild embedding nothing (and not loading the vision
-  tower), and an automatic update not fetching it.
-- `test/preprocess.test.ts` — the resize, crop-free squash and normalization
-  that make CLIP's input, without a model.
-- `test/real-vault.test.ts` — the same plugin against a real vault, skipped
-  unless pointed at one: `GNOSIS_VAULT=/path/to/vault npm test`. It asserts the
-  thing a fixture cannot — that every result resolves to a file that is
-  actually there.
-
 ## License
 
 [MIT](LICENSE). The bundle also contains transformers.js (Apache-2.0), ONNX
