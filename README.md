@@ -15,7 +15,7 @@ comparison behind related-notes are the same code — and the same measurements 
 as the CLI's. This plugin reads bytes out of the vault, calls into it, and
 shows what comes back.
 
-## Status: stage 3
+## What it does
 
 **Works with no model and no download:**
 
@@ -95,12 +95,11 @@ shows what comes back.
   by the CLI, the plugin asks before replacing it, and says what a rebuild here
   drops (images, other folders).
 
-**Not yet:**
+**Limits:**
 
-- **Staleness reporting** — "built 3 days ago, 47 notes have changed since",
-  and rebuilding automatically when notes change.
-- **PDFs**, which only the CLI indexes. Changes to images are not part of the
-  "notes changed" line on the index card; a build picks them up.
+- PDFs are indexed only by the gnosis CLI.
+- The index card's "notes changed" line counts notes, not images; a build picks
+  up changes to images.
 
 ## Getting started
 
