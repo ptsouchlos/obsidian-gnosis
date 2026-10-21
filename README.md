@@ -193,3 +193,9 @@ Three suites, each answering something the others cannot:
   unless pointed at one: `GNOSIS_VAULT=/path/to/vault npm test`. It asserts the
   thing a fixture cannot — that every result resolves to a file that is
   actually there.
+
+## License
+
+[MIT](LICENSE). The bundle also contains transformers.js (Apache-2.0), ONNX
+Runtime Web (MIT) and the gnosis query client compiled to WebAssembly, each
+under its own license.

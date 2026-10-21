@@ -1,0 +1,51 @@
+# Publish a release when a version tag is pushed.
+#
+# Obsidian installs a plugin from a GitHub release's three assets —
+# `main.js`, `manifest.json`, `styles.css` — and `main.js` is built, not
+# committed, so the release is where it comes from. The tag must be the
+# manifest's version exactly, with no leading "v", which is what Obsidian
+# matches it against.
+#
+#   git tag 0.1.0 && git push origin 0.1.0
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check the tag is the manifest's version
+        run: |
+          version="$(node -p "require('./manifest.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match manifest.json version $version" >&2
+            exit 1
+          fi
+          if ! node -p "Object.hasOwn(require('./versions.json'), '$version')" | grep -q true; then
+            echo "versions.json has no entry for $version" >&2
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Build and test
+        run: npm test
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css --title "$GITHUB_REF_NAME" --generate-notes
