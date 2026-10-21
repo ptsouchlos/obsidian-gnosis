@@ -4,6 +4,10 @@ Search your vault with [gnosis](https://github.com/ptsouchlos/gnosis)'s own
 retrieval pipeline, reading a portable index you built on your own machine.
 No server, no API key, nothing leaves the vault.
 
+**Desktop only.** The models run in a worker with WebAssembly or WebGPU, and
+their downloads run to hundreds of megabytes, which this plugin does not ask of
+a phone. Obsidian does not offer it on mobile.
+
 The ranking code is not reimplemented here. gnosis's query pipeline is
 compiled to WebAssembly and vendored in `vendor/gnosis-wasm/`, so the lexical
 channel, BM25+'s parameters, the title bonus, the fusion weight and the vector

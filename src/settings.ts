@@ -171,13 +171,6 @@ export class GnosisSettingTab extends PluginSettingTab {
             }
         };
 
-        containerEl.createEl("p", {
-            cls: "gnosis-note",
-            text:
-                "Building the index embeds every note, which is desktop-only. On a phone or " +
-                "tablet, build on a computer and let your sync bring the finished index over.",
-        });
-
         const dir = this.plugin.settings.artifactDir;
         const location = this.card(new Setting(containerEl))
             .setName("Index location")
