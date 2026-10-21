@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Search an Obsidian vault with gnosis's own retrieval pipeline, compiled to WebAssembly",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
