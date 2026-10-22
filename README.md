@@ -131,10 +131,17 @@ script/install.sh /path/to/vault
 
 No Rust toolchain needed: the WebAssembly module and its JS glue are committed
 under `vendor/gnosis-wasm/`, with the gnosis revision they came from recorded
-in `vendor/gnosis-wasm/GNOSIS_REV`. To refresh them from a gnosis checkout:
+in `vendor/gnosis-wasm/GNOSIS_REV`.
+
+A gnosis release refreshes them. Its tag publishes the wasm bundle as a release
+asset and notifies this repo, and `.github/workflows/update-wasm.yml` vendors
+that asset, checks it against its published SHA-256, runs the tests and opens a
+`chore: Re-vendor gnosis-wasm for vX.Y.Z` pull request. The asset is used as
+published, never rebuilt. The same can be done by hand:
 
 ```sh
-script/update-wasm.sh ../gnosis
+script/update-wasm.sh --release v0.1.0   # a gnosis release; no tag means the latest
+script/update-wasm.sh ../gnosis          # build from a gnosis checkout, for local work
 ```
 
 `main.js` is about 1.4 MB: the inlined 666 KB gnosis `.wasm`, and the
