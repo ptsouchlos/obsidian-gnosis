@@ -1,0 +1,104 @@
+name: Update gnosis-wasm
+
+# A gnosis release dispatches `gnosis-release` with its tag; this vendors that
+# release's wasm query client and opens (or updates) a pull request with it.
+# Run it by hand with a tag, or with none for the latest release.
+on:
+  repository_dispatch:
+    types: [gnosis-release]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: gnosis release tag, for example v0.1.0. Empty uses the latest release.
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-wasm
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      # The App token, not GITHUB_TOKEN: a pull request opened with
+      # GITHUB_TOKEN does not trigger CI.
+      - id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.INFRA_BOT_APP_ID }}
+          private-key: ${{ secrets.INFRA_BOT_PRIVATE_KEY }}
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Resolve the release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+        run: |
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release view --repo ptsouchlos/gnosis --json tagName --jq .tagName)"
+          fi
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::not a gnosis release tag: $TAG"
+            exit 1
+          fi
+          echo "tag=$TAG" >>"$GITHUB_OUTPUT"
+
+      - name: Vendor it
+        id: vendor
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          wasm=vendor/gnosis-wasm/gnosis_wasm_bg.wasm
+          before="$(stat -c %s "$wasm")"
+          script/update-wasm.sh --release "$TAG"
+          after="$(stat -c %s "$wasm")"
+          if [ -z "$(git status --porcelain vendor)" ]; then
+            echo "vendor/ already holds $TAG; nothing to do."
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >>"$GITHUB_OUTPUT"
+          {
+            echo "body<<EOF_BODY"
+            echo "Re-vendors the wasm query client from gnosis [$TAG](https://github.com/ptsouchlos/gnosis/releases/tag/$TAG)."
+            echo
+            echo "\`gnosis_wasm_bg.wasm\`: $before → $after bytes."
+            echo
+            echo "- [ ] Checked in Obsidian on Book Notes: keyword search and hybrid search"
+            echo
+            echo "## gnosis $TAG"
+            echo
+            gh release view "$TAG" --repo ptsouchlos/gnosis --json body --jq .body
+            echo "EOF_BODY"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Build and test
+        if: steps.vendor.outputs.changed == 'true'
+        shell: bash
+        run: |
+          npm ci
+          npm test
+
+      - name: Open or update the pull request
+        if: steps.vendor.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.app.outputs.token }}
+          branch: gnosis/update
+          add-paths: vendor/gnosis-wasm
+          commit-message: "chore: Re-vendor gnosis-wasm for ${{ steps.release.outputs.tag }}"
+          title: "chore: Re-vendor gnosis-wasm for ${{ steps.release.outputs.tag }}"
+          body: ${{ steps.vendor.outputs.body }}
