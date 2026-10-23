@@ -44,7 +44,7 @@ export function mapLayout(scores: number[], pairs: (number | null)[][]): MapPoin
     const angles = mdsAngles(similarity(pairs));
     const radii = radiiFor(scores);
     return separate(
-        angles.map((angle, i) => ({ x: radii[i]! * Math.cos(angle), y: radii[i]! * Math.sin(angle) })),
+        angles.map((angle, i) => ({ x: radii[i] * Math.cos(angle), y: radii[i] * Math.sin(angle) })),
     );
 }
 
@@ -62,7 +62,7 @@ export function similarity(pairs: (number | null)[][]): number[][] {
             if (i === j) {
                 return 1;
             }
-            const both = [pairs[i]![j], pairs[j]![i]].filter((s): s is number => s !== null && s !== undefined);
+            const both = [pairs[i][j], pairs[j][i]].filter((s): s is number => s !== null && s !== undefined);
             return both.length === 0 ? floor : both.reduce((a, b) => a + b, 0) / both.length;
         }),
     );
@@ -82,13 +82,13 @@ export function mdsAngles(sim: number[][]): number[] {
     const d2 = sim.map((row) => row.map((s) => (1 - s) ** 2));
     const rowMean = d2.map((row) => row.reduce((a, b) => a + b, 0) / n);
     const mean = rowMean.reduce((a, b) => a + b, 0) / n;
-    const b = d2.map((row, i) => row.map((v, j) => -0.5 * (v - rowMean[i]! - rowMean[j]! + mean)));
+    const b = d2.map((row, i) => row.map((v, j) => -0.5 * (v - rowMean[i] - rowMean[j] + mean)));
 
     const first = topEigenvector(b, []);
     const second = topEigenvector(b, [first]);
     return first.vector.map((x, i) => {
         const px = x * Math.sqrt(Math.max(first.value, 0));
-        const py = second.vector[i]! * Math.sqrt(Math.max(second.value, 0));
+        const py = second.vector[i] * Math.sqrt(Math.max(second.value, 0));
         // A point at the centroid has no direction of its own; spread such
         // points evenly rather than stacking them all at angle zero.
         return Math.hypot(px, py) < 1e-9 ? (2 * Math.PI * i) / n : Math.atan2(py, px);
@@ -110,7 +110,7 @@ function topEigenvector(m: number[][], found: Eigen[]): Eigen {
     for (let iter = 0; iter < 200; iter++) {
         for (const f of found) {
             const dotted = dot(v, f.vector);
-            v = v.map((x, i) => x - dotted * f.vector[i]!);
+            v = v.map((x, i) => x - dotted * f.vector[i]);
         }
         const next = m.map((row) => dot(row, v));
         const norm = Math.hypot(...next);
@@ -119,7 +119,7 @@ function topEigenvector(m: number[][], found: Eigen[]): Eigen {
         }
         const unit = next.map((x) => x / norm);
         value = dot(unit, m.map((row) => dot(row, unit)));
-        const moved = Math.hypot(...unit.map((x, i) => x - v[i]!));
+        const moved = Math.hypot(...unit.map((x, i) => x - v[i]));
         v = unit;
         if (moved < 1e-10) {
             break;
@@ -131,7 +131,7 @@ function topEigenvector(m: number[][], found: Eigen[]): Eigen {
 function dot(a: number[], b: number[]): number {
     let sum = 0;
     for (let i = 0; i < a.length; i++) {
-        sum += a[i]! * b[i]!;
+        sum += a[i] * b[i];
     }
     return sum;
 }
@@ -155,8 +155,8 @@ function separate(points: MapPoint[]): MapPoint[] {
         let moved = false;
         for (let i = 0; i < polar.length; i++) {
             for (let j = i + 1; j < polar.length; j++) {
-                const p = polar[i]!;
-                const q = polar[j]!;
+                const p = polar[i];
+                const q = polar[j];
                 const gap = Math.hypot(p.r * Math.cos(p.a) - q.r * Math.cos(q.a), p.r * Math.sin(p.a) - q.r * Math.sin(q.a));
                 if (gap >= MIN_GAP) {
                     continue;

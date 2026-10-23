@@ -42,7 +42,7 @@ let loadedImages: EmbedImages | null = null;
 
 /** An image file's pixels, as the CLI reads them: no orientation, no color management. */
 async function decode(bytes: Uint8Array): Promise<{ rgba: Uint8ClampedArray; width: number; height: number }> {
-    const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]), {
+    const bitmap = await createImageBitmap(new Blob([bytes]), {
         // The `image` crate the CLI decodes with applies neither, so neither
         // is applied here: a vector that looked at a rotated or recolored
         // picture would be a different vector.

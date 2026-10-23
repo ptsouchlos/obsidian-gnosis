@@ -37,10 +37,10 @@ export function segmented<T extends string>(
         current = next;
         options.forEach((option, i) => {
             const on = option.value === next;
-            buttons[i]!.toggleClass("is-selected", on);
-            buttons[i]!.setAttribute("aria-checked", String(on));
+            buttons[i].toggleClass("is-selected", on);
+            buttons[i].setAttribute("aria-checked", String(on));
             // One tab stop for the group, as a radio group has.
-            buttons[i]!.tabIndex = on ? 0 : -1;
+            buttons[i].tabIndex = on ? 0 : -1;
         });
     }
 
@@ -52,9 +52,9 @@ export function segmented<T extends string>(
         }
         evt.preventDefault();
         const at = options.findIndex((o) => o.value === current);
-        const next = options[(at + step + options.length) % options.length]!;
+        const next = options[(at + step + options.length) % options.length];
         select(next.value);
-        buttons[options.indexOf(next)]!.focus();
+        buttons[options.indexOf(next)].focus();
         onChange(next.value);
     });
 

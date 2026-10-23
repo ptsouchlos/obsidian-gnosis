@@ -25,7 +25,7 @@ const MAP_EXTENT = 116;
 /** Hovering a dot lights its row, and the other way round. */
 function linkHover(dots: SVGElement[], rows: HTMLElement[]): void {
     dots.forEach((dot, i) => {
-        const row = rows[i]!;
+        const row = rows[i];
         const on = (lit: boolean) => {
             dot.classList.toggle("is-hovered", lit);
             row.toggleClass("is-hovered", lit);
@@ -252,7 +252,7 @@ export class RelatedView extends ItemView {
         svg.createSvg("circle", { cls: "gnosis-related-center", attr: { r: 5 } });
 
         return hits.map((hit, i) => {
-            const { x, y } = points[i]!;
+            const { x, y } = points[i];
             const dot = svg.createSvg("g", {
                 cls: "gnosis-related-dot",
                 attr: {

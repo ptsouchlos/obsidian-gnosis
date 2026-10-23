@@ -91,7 +91,7 @@ export async function openArtifact(app: App, dir: string): Promise<Index> {
     if (format !== null) {
         throw new Error(olderFormatMessage(format));
     }
-    return Index.open(raw.manifestJson, raw.shards as unknown as Map<unknown, unknown>);
+    return Index.open(raw.manifestJson, raw.shards);
 }
 
 /** Parse a manifest's JSON, naming the file when it is not JSON at all. */
