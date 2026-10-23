@@ -16,6 +16,9 @@ on:
 
 permissions:
   contents: write
+  # For the attestation: a Sigstore signing certificate, and storing it.
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -44,6 +47,16 @@ jobs:
 
       - name: Build and test
         run: npm test
+
+      # Lets anyone check, with `gh attestation verify`, that the assets were
+      # built here from this tag's source.
+      - name: Attest the release assets
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
 
       - name: Publish the release
         env:
