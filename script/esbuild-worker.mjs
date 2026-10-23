@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+import { minify as terser } from "terser";
 
 const require = createRequire(import.meta.url);
 
@@ -89,21 +90,48 @@ export function workerPlugin({ minify, inputs }) {
  * Runtime to its build that loads the loader separately, carries the loader's
  * text, and starts it from a blob. Bundled, not fetched: no ONNX Runtime
  * JavaScript comes from the network either way.
+ *
+ * Without its Node branch. The loader can also run under Node, where it reads
+ * the binary with `fs` and starts threads with `worker_threads`; the worker
+ * hides `process` before the loader runs, so that branch is never taken here,
+ * but its `require`s would still ship in `main.js`, and the community
+ * directory's review reads them as filesystem access. Fixing the Node check
+ * to `false`, as transformers.js does when it fetches this loader itself, lets
+ * terser drop the branch.
  */
+async function ortLoader() {
+    const fromTransformers = createRequire(require.resolve("@huggingface/transformers"));
+    const dist = dirname(fromTransformers.resolve("onnxruntime-web/wasm"));
+    const source = readFileSync(join(dist, "ort-wasm-simd-threaded.mjs"), "utf8");
+    const nodeCheck = "globalThis.process?.versions?.node";
+    if (!source.includes(nodeCheck)) {
+        throw new Error(`ONNX Runtime's loader no longer tests ${nodeCheck}; update ortLoader`);
+    }
+    const { code } = await terser(source.replaceAll(nodeCheck, "false"), {
+        module: true,
+        compress: { passes: 3 },
+        mangle: false,
+    });
+    const left = code.match(/\brequire\(|\bimport\(|\bprocess\b/);
+    if (left) {
+        throw new Error(`ONNX Runtime's loader still reaches Node after stripping: ${left[0]}`);
+    }
+    return code;
+}
+
+/** Resolve `gnosis:ort-loader` to the CPU build's loader (see `ortLoader`). */
 function loaderPlugin({ gpu }) {
     return {
         name: "gnosis-ort-loader",
         setup(build) {
             build.onResolve({ filter: /^gnosis:ort-loader$/ }, () => ({ path: "ort-loader", namespace: "gnosis-ort-loader" }));
-            build.onLoad({ filter: /.*/, namespace: "gnosis-ort-loader" }, () => {
+            build.onLoad({ filter: /.*/, namespace: "gnosis-ort-loader" }, async () => {
                 // The GPU worker runs one thread and its build bundles its own
                 // loader; it carries none.
                 if (gpu) {
                     return { contents: "", loader: "text" };
                 }
-                const fromTransformers = createRequire(require.resolve("@huggingface/transformers"));
-                const dist = dirname(fromTransformers.resolve("onnxruntime-web/wasm"));
-                return { contents: readFileSync(join(dist, "ort-wasm-simd-threaded.mjs"), "utf8"), loader: "text" };
+                return { contents: await ortLoader(), loader: "text" };
             });
         },
     };
