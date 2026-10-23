@@ -176,7 +176,7 @@ test("the diagnostics report records the build, and holds no note contents or pa
 
     assert.match(report, /Gnosis 0\.0\.0-test/);
     assert.match(report, /Obsidian 0\.0\.0-test/);
-    assert.match(report, /Platform: desktop, Linux/);
+    assert.match(report, /Platform: Linux/);
     assert.match(report, /- State: Ready/);
     assert.match(report, /indexed after \d+\.\d s/, "the last build and its duration");
     assert.match(report, /- 2 notes, \d+ chunks: \d+ embedded, 0 notes unchanged/);
@@ -412,15 +412,6 @@ test("an index the CLI rewrites during a build is not overwritten without asking
     assert.equal(second.replaces.length, 1, "asked once, at the point of writing");
     assert.notEqual(readFileSync(manifest, "utf8"), changedBefore, "the other writer's manifest stands");
     assert.ok(!second.app.vault.adapter.writes.includes(`${ARTIFACT}/manifest.json`));
-});
-
-test("building is refused on mobile", async () => {
-    const root = vaultCopy({ artifact: false });
-    const { plugin, embedder } = await load(root);
-    plugin.isMobile = () => true;
-    await plugin.buildIndex();
-    assert.ok(notices.some((n) => n.includes("desktop-only")));
-    assert.deepEqual(embedder.seen, []);
 });
 
 test("an index built with a model the plugin cannot run is left to the CLI", async () => {
@@ -885,7 +876,7 @@ test("with semantic search off, nothing is downloaded or rebuilt unasked", async
     assert.equal(plugin.autoSkipped, null);
 });
 
-test("nothing runs when the setting is off, on mobile, or with nothing changed", async () => {
+test("nothing runs when the setting is off or with nothing changed", async () => {
     const { root, plugin, app, embedder } = await autoHarness();
     app.vault.adapter.writes.length = 0;
     await plugin.autoUpdate();
@@ -893,9 +884,6 @@ test("nothing runs when the setting is off, on mobile, or with nothing changed",
 
     edit(root, app, "notes/hydration.md", "# Hydration\n\nRewritten.\n");
     plugin.settings.autoUpdate = false;
-    await plugin.autoUpdate();
-    plugin.settings.autoUpdate = true;
-    plugin.isMobile = () => true;
     await plugin.autoUpdate();
     assert.deepEqual(embedder.seen, []);
     assert.deepEqual(notices, [], "and says nothing about it");
