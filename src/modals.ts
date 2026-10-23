@@ -98,25 +98,25 @@ abstract class HitModal extends SuggestModal<Hit> {
             el.addClass("gnosis-hit-has-thumb");
             el.appendChild(thumbnail);
         }
-        el.createEl("div", { cls: "gnosis-hit-title", text: noteName(hit) });
-        el.createEl("div", { cls: "gnosis-hit-detail", text: `› ${hitSubtitle(hit)}` });
+        el.createDiv({ cls: "gnosis-hit-title", text: noteName(hit) });
+        el.createDiv({ cls: "gnosis-hit-detail", text: `› ${hitSubtitle(hit)}` });
         const snippet = hitSnippet(hit);
         if (snippet !== "") {
-            el.createEl("div", { cls: "gnosis-hit-snippet", text: snippet });
+            el.createDiv({ cls: "gnosis-hit-snippet", text: snippet });
         }
         const file = resolveHit(this.app, hit);
         if (file !== null) {
             const cache = this.app.metadataCache.getFileCache(file);
             const meta = metaLine(cache?.frontmatter?.["created"], file.stat.mtime, cache === null ? [] : getAllTags(cache) ?? []);
             if (meta !== "") {
-                el.createEl("div", { cls: "gnosis-hit-meta", text: meta });
+                el.createDiv({ cls: "gnosis-hit-meta", text: meta });
             }
         }
         if (this.display.showScores) {
             // The score as gnosis computed it — the same number at any rank —
             // rather than a share of the top hit, which reads 100% even for a
             // poor match; then what made it.
-            el.createEl("div", { cls: "gnosis-hit-scores", text: scoreLine(hit, this.keywordShare()) });
+            el.createDiv({ cls: "gnosis-hit-scores", text: scoreLine(hit, this.keywordShare()) });
         }
     }
 
@@ -238,7 +238,7 @@ export class SemanticSearchModal extends HitModal {
         }
         // Embedding is the slow part of a query, so wait for typing to pause
         // rather than embed every prefix of a word.
-        await new Promise((resolve) => setTimeout(resolve, this.debounceMs));
+        await new Promise((resolve) => window.setTimeout(resolve, this.debounceMs));
         if (ticket !== this.ticket) {
             return this.last;
         }

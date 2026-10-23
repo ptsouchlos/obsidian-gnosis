@@ -11,7 +11,7 @@
 //! This module must be imported before transformers.js. ES module evaluation
 //! follows import order, and esbuild preserves it.
 
-const scope = globalThis as { process?: unknown };
+const scope = self as unknown as { process?: unknown };
 if (typeof scope.process !== "undefined") {
     scope.process = undefined;
 }

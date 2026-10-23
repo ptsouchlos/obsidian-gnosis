@@ -217,7 +217,10 @@ test("while the model is still loading, search answers with keywords", async () 
     assert.equal(hits[0]?.path, "notes/hydration.md", "lexical results, not an empty picker");
     // Scored as what they are: keywords alone, not a blend with no meaning in it.
     const texts: string[] = [];
-    const el = { createEl: (_tag: string, o?: { text?: string }) => (o?.text !== undefined && texts.push(o.text), el) };
+    const el = {
+        createEl: (_tag: string, o?: { text?: string }) => (o?.text !== undefined && texts.push(o.text), el),
+        createDiv: (o?: { text?: string }) => el.createEl("div", o),
+    };
     modal.renderSuggestion(hits[0]!, el as never);
     assert.ok(texts.some((t) => t.startsWith("Keywords ")), JSON.stringify(texts));
 
@@ -225,7 +228,10 @@ test("while the model is still loading, search answers with keywords", async () 
     await waitFor("the model", () => plugin.runningOn() !== null && (plugin as never as { embedder: { ready: unknown } }).embedder.ready !== null);
     const blended = (await modal.type("baker's percentages")) as Hit[];
     const after: string[] = [];
-    const el2 = { createEl: (_tag: string, o?: { text?: string }) => (o?.text !== undefined && after.push(o.text), el2) };
+    const el2 = {
+        createEl: (_tag: string, o?: { text?: string }) => (o?.text !== undefined && after.push(o.text), el2),
+        createDiv: (o?: { text?: string }) => el2.createEl("div", o),
+    };
     modal.renderSuggestion(blended[0]!, el2 as never);
     assert.ok(after.some((t) => t.startsWith("Match ")), JSON.stringify(after));
 });

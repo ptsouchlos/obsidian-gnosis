@@ -28,7 +28,7 @@ import {
     pipeline,
 } from "@huggingface/transformers";
 import { CLIP_SIZE, clipPixels } from "./preprocess.js";
-import type { Done, LoadRequest, Progress, Request, Response, RuntimeSpec } from "./protocol.js";
+import type { Done, LoadRequest, Progress, Request, Response as Reply, RuntimeSpec } from "./protocol.js";
 
 /** Unit vectors for texts, flat: `texts.length * dim` floats. */
 type Embed = (texts: string[]) => Promise<{ vectors: Float32Array; dim: number }>;
@@ -64,7 +64,7 @@ async function decode(bytes: Uint8Array): Promise<{ rgba: Uint8ClampedArray; wid
     }
 }
 
-function post(message: Response, transfer: Transferable[] = []): void {
+function post(message: Reply, transfer: Transferable[] = []): void {
     (self as unknown as Worker).postMessage(message, transfer);
 }
 
@@ -74,7 +74,7 @@ function hex(buffer: ArrayBuffer): string {
 
 /** Read a response body, reporting bytes as they arrive. */
 async function readWithProgress(
-    response: globalThis.Response,
+    response: Response,
     report: (loaded: number, total: number) => void,
 ): Promise<Uint8Array> {
     const total = Number(response.headers.get("content-length") ?? 0);
@@ -138,7 +138,7 @@ async function runtimeBinary(runtime: RuntimeSpec, onProgress: (p: Progress) => 
         // without reading 14 MB to find out.
         await cache.put(
             runtime.url,
-            new globalThis.Response(bytes, { headers: { "content-length": String(bytes.byteLength) } }),
+            new Response(bytes, { headers: { "content-length": String(bytes.byteLength) } }),
         );
     }
     return bytes;
@@ -214,7 +214,7 @@ async function load(request: LoadRequest): Promise<void> {
             let vectors = new Float32Array(0);
             if (ok.length > 0) {
                 const input = new Tensor("float32", pixels.subarray(0, ok.length * plane), [ok.length, 3, CLIP_SIZE, CLIP_SIZE]);
-                const { image_embeds } = await clip({ pixel_values: input });
+                const { image_embeds } = (await clip({ pixel_values: input })) as { image_embeds: Tensor };
                 const unit = image_embeds.normalize(2, -1);
                 dim = unit.dims.at(-1) ?? 0;
                 // Back to the caller's order, zeros where a file failed.
@@ -240,7 +240,7 @@ async function load(request: LoadRequest): Promise<void> {
         });
         loaded = async (texts) => {
             const inputs = tokenizer(texts, { padding: true, truncation: true });
-            const { text_embeds } = await clip(inputs);
+            const { text_embeds } = (await clip(inputs)) as { text_embeds: Tensor };
             const unit = text_embeds.normalize(2, -1);
             return { vectors: Float32Array.from(unit.data as Float32Array), dim: unit.dims.at(-1) ?? 0 };
         };

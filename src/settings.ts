@@ -357,7 +357,6 @@ export class GnosisSettingTab extends PluginSettingTab {
                 slider
                     .setLimits(5, 50, 5)
                     .setValue(this.plugin.settings.limit)
-                    .setDynamicTooltip()
                     .onChange(async (value) => {
                         this.plugin.settings.limit = value;
                         await this.plugin.saveSettings();
@@ -520,7 +519,7 @@ export class GnosisSettingTab extends PluginSettingTab {
             .addButton((button) =>
                 button
                     .setButtonText("Reset")
-                    .setWarning()
+                    .setDestructive()
                     .onClick(async () => {
                         if (await this.plugin.resetSettings()) {
                             this.display();

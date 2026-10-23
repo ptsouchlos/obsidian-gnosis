@@ -37,7 +37,11 @@ async function load(settings?: { artifactDir?: string }) {
 }
 
 /** The element `renderSuggestion` writes into, recording what it was given. */
-function fakeEl(): { texts: string[]; createEl: (tag: string, o?: { text?: string }) => unknown } {
+function fakeEl(): {
+    texts: string[];
+    createEl: (tag: string, o?: { text?: string }) => unknown;
+    createDiv: (o?: { text?: string }) => unknown;
+} {
     const texts: string[] = [];
     const el = {
         texts,
@@ -46,6 +50,9 @@ function fakeEl(): { texts: string[]; createEl: (tag: string, o?: { text?: strin
                 texts.push(o.text);
             }
             return el;
+        },
+        createDiv(o?: { text?: string }) {
+            return el.createEl("div", o);
         },
     };
     return el;
