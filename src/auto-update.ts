@@ -15,8 +15,8 @@ export interface Clock {
 }
 
 const realClock: Clock = {
-    set: (fn, ms) => globalThis.setTimeout(fn, ms),
-    clear: (handle) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>),
+    set: (fn, ms) => window.setTimeout(fn, ms),
+    clear: (handle) => window.clearTimeout(handle as number),
 };
 
 export class AutoUpdater {

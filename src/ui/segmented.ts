@@ -18,7 +18,7 @@ export function segmented<T extends string>(
     label: string,
     options: readonly SegmentedOption<T>[],
     value: T,
-    onChange: (value: T) => void,
+    onChange: (value: T) => void | Promise<void>,
 ): Segmented<T> {
     const el = parent.createDiv({ cls: "gnosis-segmented", attr: { role: "radiogroup", "aria-label": label } });
     let current = value;
@@ -27,7 +27,7 @@ export function segmented<T extends string>(
         button.addEventListener("click", () => {
             if (option.value !== current) {
                 select(option.value);
-                onChange(option.value);
+                void onChange(option.value);
             }
         });
         return button;
@@ -55,7 +55,7 @@ export function segmented<T extends string>(
         const next = options[(at + step + options.length) % options.length];
         select(next.value);
         buttons[options.indexOf(next)].focus();
-        onChange(next.value);
+        void onChange(next.value);
     });
 
     select(value);

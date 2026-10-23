@@ -1104,7 +1104,7 @@ export default class GnosisPlugin extends Plugin {
                 this.statusChanged(true);
             },
             now: () => Date.now(),
-            yieldToUi: () => new Promise((resolve) => setTimeout(resolve, 0)),
+            yieldToUi: () => new Promise((resolve) => window.setTimeout(resolve, 0)),
             checkpointEveryMs: this.checkpointEveryMs,
             batchChunks: BATCH_CHUNKS[device],
         }).finally(() => {
@@ -1417,7 +1417,7 @@ export default class GnosisPlugin extends Plugin {
     }
 
     async loadSettings(): Promise<void> {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<GnosisSettings> | null);
     }
 
     async saveSettings(): Promise<void> {

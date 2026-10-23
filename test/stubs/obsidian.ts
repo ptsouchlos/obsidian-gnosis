@@ -12,6 +12,10 @@ import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 
+// Obsidian runs the plugin in a window, and the plugin takes its timers from
+// it, as popout windows need; node's globals stand in for it.
+(globalThis as { window?: unknown }).window ??= globalThis;
+
 export class TFile {
     constructor(
         readonly path: string,
