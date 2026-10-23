@@ -1,5 +1,3 @@
-/* tslint:disable */
-/* eslint-disable */
 
 /**
  * Accumulates documents, then packs them into an artifact.
@@ -14,7 +12,7 @@ export class Builder {
      * `mtime_ms` is a JavaScript timestamp in milliseconds; the artifact
      * records seconds, as the CLI does from the filesystem.
      */
-    addDocument(path: string, text: string, mtime_ms: number): any;
+    addDocument(path: string, text: string, mtime_ms: number): unknown;
     /**
      * Offer one image file to the index; needs `image` in the spec.
      *
@@ -22,11 +20,11 @@ export class Builder {
      * vision-tower vector (`setImageVector`) and a title proxy
      * (`setTitleVector`, with the `title` this returns).
      */
-    addImage(path: string, hash: string, mtime_ms: number): any;
+    addImage(path: string, hash: string, mtime_ms: number): unknown;
     /**
      * A builder with nothing to reuse: every document will be embedded.
      */
-    static create(spec: any): Builder;
+    static create(spec: unknown): Builder;
     /**
      * How many documents have been offered.
      */
@@ -37,13 +35,13 @@ export class Builder {
      * `created_unix` comes from the client because wasm has no clock. It is
      * the one field that makes two otherwise identical artifacts differ.
      */
-    finish(created_unix: number): any;
+    finish(created_unix: number): unknown;
     /**
      * A builder that reuses an existing artifact: a document whose content
      * hash matches keeps its chunks *and its vectors*, so an ordinary day's
      * editing re-embeds a handful of chunks rather than a vault.
      */
-    static fromArtifact(spec: any, manifest_json: string, shards: Map<any, any>): Builder;
+    static fromArtifact(spec: unknown, manifest_json: string, shards: Map<unknown, unknown>): Builder;
     /**
      * How many documents are waiting for vectors, for a progress report.
      */
@@ -83,7 +81,7 @@ export class Index {
      * What this artifact is: its models, their pooling and prefixes, its dimensions,
      * how much it holds and when it was built.
      */
-    info(): any;
+    info(): unknown;
     /**
      * Search the lexical channel alone, with no model at all.
      *
@@ -93,7 +91,7 @@ export class Index {
      * scores 0.666 nDCG@10 against the hybrid path's 0.722 — worse, and far
      * from nothing.
      */
-    lexicalSearch(query: string, limit: number, filter: any): any;
+    lexicalSearch(query: string, limit: number, filter: unknown): unknown;
     /**
      * Assemble an index from bytes the client has already read.
      *
@@ -102,7 +100,7 @@ export class Index {
      * partially synced artifact fails to open rather than answering queries
      * from a mixture of two indexes.
      */
-    static open(manifest_json: string, shards: Map<any, any>): Index;
+    static open(manifest_json: string, shards: Map<unknown, unknown>): Index;
     /**
      * Documents most similar to `path`'s own chunks — the other model-free
      * tier, at full quality, since both sides of the comparison are vectors
@@ -114,11 +112,11 @@ export class Index {
      * host with its own alias index (Obsidian has one) should resolve aliases
      * there and pass the results in a filter rather than expect this to.
      */
-    related(path: string, limit: number, include_linked: boolean, filter: any): any;
+    related(path: string, limit: number, include_linked: boolean, filter: unknown): unknown;
     /**
      * The configuration in force, so a client can report it.
      */
-    searchConfig(): any;
+    searchConfig(): unknown;
     /**
      * Run a hybrid query: one vector per space, fused with the lexical
      * channel in the text space.
@@ -128,7 +126,7 @@ export class Index {
      * a space without an embedder is not silently skipped, it is simply not
      * asked about.
      */
-    search(query: string, vectors: Map<any, any>, limit: number, filter: any): any;
+    search(query: string, vectors: Map<unknown, unknown>, limit: number, filter: unknown): unknown;
     /**
      * Override the retrieval configuration.
      *
@@ -137,7 +135,7 @@ export class Index {
      * changes it is choosing to diverge from what this project's numbers
      * describe, which is why it is a separate, explicit call.
      */
-    setSearchConfig(config: any): void;
+    setSearchConfig(config: unknown): void;
     /**
      * How related each of `paths` is to each other: a square array where row
      * `i`, column `j` is the text-space score `related(paths[i])` ranks
@@ -156,7 +154,7 @@ export class Index {
      * list to normalize against. On a text-only artifact they are the same
      * numbers.
      */
-    similarities(paths: string[]): any;
+    similarities(paths: string[]): unknown;
     /**
      * Compare a client's own view of its vault against what the artifact
      * holds.
@@ -167,7 +165,7 @@ export class Index {
      * freshness cannot be determined is reported as such rather than counted
      * as fresh.
      */
-    staleness(entries: any): any;
+    staleness(entries: unknown): unknown;
 }
 
 /**
