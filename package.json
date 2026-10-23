@@ -1,6 +1,6 @@
 {
   "name": "obsidian-gnosis",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Search an Obsidian vault with gnosis's own retrieval pipeline, compiled to WebAssembly",
   "private": true,
   "license": "MIT",
