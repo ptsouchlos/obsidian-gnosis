@@ -174,7 +174,7 @@ function complete(finished: Finished, base: RawArtifact | null): RawArtifact {
 function open(spec: BuildSpec, base: RawArtifact | null): Builder {
     return base === null
         ? Builder.create(spec)
-        : Builder.fromArtifact(spec, base.manifestJson, base.shards as unknown as Map<unknown, unknown>);
+        : Builder.fromArtifact(spec, base.manifestJson, base.shards);
 }
 
 export async function runBuild(input: BuildInput): Promise<BuildResult> {
@@ -236,7 +236,7 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
             // to the builder in one piece, so it is never half-supplied.
             const batch: Queued[] = [];
             let size = 0;
-            while (queue.length > 0 && (batch.length === 0 || size + queue[0]!.texts.length <= batchChunks)) {
+            while (queue.length > 0 && (batch.length === 0 || size + queue[0].texts.length <= batchChunks)) {
                 const next = queue.shift()!;
                 batch.push(next);
                 size += next.texts.length;
@@ -270,7 +270,7 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
             batch.forEach(({ file }, i) => {
                 const message = failed.get(i);
                 if (message === undefined) {
-                    builder!.setImageVector(file.path, vectors[i]!);
+                    builder!.setImageVector(file.path, vectors[i]);
                     imagesEmbedded++;
                 } else {
                     builder!.removeDocument(file.path);
@@ -290,7 +290,7 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
         while (titles.length > 0) {
             const batch = titles.splice(0, titleBatch);
             const vectors = await input.embedTitles!(batch.map((t) => t.title));
-            batch.forEach(({ path }, i) => builder!.setTitleVector(path, vectors[i]!));
+            batch.forEach(({ path }, i) => builder!.setTitleVector(path, vectors[i]));
             await input.yieldToUi();
         }
     };
@@ -355,7 +355,7 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
             if (input.signal.aborted) {
                 break;
             }
-            const result = builder!.addDocument(note.path, await note.read(), note.mtime) as {
+            const result = builder.addDocument(note.path, await note.read(), note.mtime) as {
                 reused: boolean;
                 texts: string[];
                 title?: string;
@@ -391,7 +391,7 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
                 break;
             }
             const bytes = await image.read();
-            const result = builder!.addImage(image.path, contentHashBytes(bytes), image.mtime) as {
+            const result = builder.addImage(image.path, contentHashBytes(bytes), image.mtime) as {
                 reused: boolean;
                 title?: string;
             };

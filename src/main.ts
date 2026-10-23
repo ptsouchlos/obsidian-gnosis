@@ -519,7 +519,7 @@ export default class GnosisPlugin extends Plugin {
         const vision = queryModelFor(CLIP_VISION_MODEL)!;
         const [text, runtime] = downloadsFor(CLIP_MODEL, clip, RUNTIMES[device], device);
         const [visionDownload] = downloadsFor(CLIP_VISION_MODEL, vision, RUNTIMES[device], device);
-        if (!(await this.askConsent([text!, { ...visionDownload!, later: true }, runtime!]))) {
+        if (!(await this.askConsent([text, { ...visionDownload, later: true }, runtime]))) {
             return false;
         }
         this.settings.searchImages = true;
@@ -1109,7 +1109,7 @@ export default class GnosisPlugin extends Plugin {
             batchChunks: BATCH_CHUNKS[device],
         }).finally(() => {
             // Whether it finished, failed or was canceled: nothing keeps the model loaded.
-            void (vision as Promise<ImageEmbedder> | null)?.then((v) => v.dispose(), () => {});
+            void vision?.then((v) => v.dispose(), () => {});
         });
         for (const file of result.skipped) {
             this.diagnostics.record("error", `skipped an image that would not decode: ${file.message}`);

@@ -54,7 +54,7 @@ function weights(inSize: number, outSize: number): { first: number; weights: Flo
         }
         if (sum !== 0) {
             for (let i = 0; i < w.length; i++) {
-                w[i]! /= sum;
+                w[i] /= sum;
             }
         }
         out.push({ first: left, weights: w });
@@ -75,12 +75,12 @@ export function resizeExact(
     const rows = weights(height, newHeight);
     const tall = new Uint8Array(width * newHeight * 3);
     for (let y = 0; y < newHeight; y++) {
-        const { first, weights: w } = rows[y]!;
+        const { first, weights: w } = rows[y];
         for (let x = 0; x < width; x++) {
             for (let c = 0; c < 3; c++) {
                 let t = 0;
                 for (let i = 0; i < w.length; i++) {
-                    t += rgb[((first + i) * width + x) * 3 + c]! * w[i]!;
+                    t += rgb[((first + i) * width + x) * 3 + c] * w[i];
                 }
                 tall[(y * width + x) * 3 + c] = byte(t);
             }
@@ -90,11 +90,11 @@ export function resizeExact(
     const out = new Uint8Array(newWidth * newHeight * 3);
     for (let y = 0; y < newHeight; y++) {
         for (let x = 0; x < newWidth; x++) {
-            const { first, weights: w } = columns[x]!;
+            const { first, weights: w } = columns[x];
             for (let c = 0; c < 3; c++) {
                 let t = 0;
                 for (let i = 0; i < w.length; i++) {
-                    t += tall[(y * width + first + i) * 3 + c]! * w[i]!;
+                    t += tall[(y * width + first + i) * 3 + c] * w[i];
                 }
                 out[(y * newWidth + x) * 3 + c] = byte(t);
             }
@@ -122,7 +122,7 @@ export function clipPixels(rgba: Uint8Array | Uint8ClampedArray, width: number, 
     const out = new Float32Array(3 * plane);
     for (let p = 0; p < plane; p++) {
         for (let c = 0; c < 3; c++) {
-            out[c * plane + p] = (small[p * 3 + c]! / 255 - MEAN[c]!) / STD[c]!;
+            out[c * plane + p] = (small[p * 3 + c] / 255 - MEAN[c]) / STD[c];
         }
     }
     return out;
