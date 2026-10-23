@@ -153,6 +153,8 @@ plugin fetches no JavaScript at run time.
 
 ## License
 
-[MIT](LICENSE). The bundle also contains transformers.js (Apache-2.0), ONNX
-Runtime Web (MIT) and the gnosis query client compiled to WebAssembly, each
-under its own license.
+[MIT](LICENSE). `main.js` also bundles transformers.js and its tokenizer and
+template packages (Apache-2.0 and MIT), ONNX Runtime Web (MIT), and the gnosis
+query client compiled to WebAssembly (MIT) with the Rust crates it links. Their
+licenses are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), generated
+from what the build reads by `npm run notices`.
