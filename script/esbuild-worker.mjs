@@ -53,8 +53,11 @@ export function runtimeDefine() {
  * Resolve `worker:<path>` to that file's bundled source, as text, against ONNX
  * Runtime's CPU build, and `worker-gpu:<path>` the same against its WebGPU
  * build.
+ *
+ * `inputs`, if given, is a Set that collects every file the workers were
+ * bundled from, which the outer build's metafile cannot see.
  */
-export function workerPlugin({ minify }) {
+export function workerPlugin({ minify, inputs }) {
     return {
         name: "gnosis-worker",
         setup(build) {
@@ -65,8 +68,15 @@ export function workerPlugin({ minify }) {
                     namespace: gpu ? "gnosis-worker-gpu" : "gnosis-worker",
                 };
             });
-            build.onLoad({ filter: /.*/, namespace: "gnosis-worker-gpu" }, (args) => bundleWorker(args.path, { minify, gpu: true }));
-            build.onLoad({ filter: /.*/, namespace: "gnosis-worker" }, (args) => bundleWorker(args.path, { minify, gpu: false }));
+            const load = async (path, gpu) => {
+                const worker = await bundleWorker(path, { minify, gpu });
+                for (const file of worker.watchFiles) {
+                    inputs?.add(file);
+                }
+                return worker;
+            };
+            build.onLoad({ filter: /.*/, namespace: "gnosis-worker-gpu" }, (args) => load(args.path, true));
+            build.onLoad({ filter: /.*/, namespace: "gnosis-worker" }, (args) => load(args.path, false));
         },
     };
 }

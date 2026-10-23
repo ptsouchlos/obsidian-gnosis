@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
     "check": "tsc --noEmit",
-    "test": "npm run build && node test/build.mjs && node --test .test-build/*.test.cjs test/bundle.test.cjs"
+    "notices": "node script/notices.mjs",
+    "test": "npm run build && node script/notices.mjs --check && node test/build.mjs && node --test .test-build/*.test.cjs test/bundle.test.cjs"
   },
   "devDependencies": {
     "@types/node": "22.14.1",
