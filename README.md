@@ -42,8 +42,18 @@ shows what comes back.
 - Turning it on asks first, and lists what it downloads: the model's files
   from Hugging Face at the revision the gnosis CLI uses (bge-small-en-v1.5:
   134 MB; multilingual-e5-small: 487 MB), and ONNX Runtime's WebAssembly engine
-  from jsDelivr (14.3 MB), which is checked against a SHA-256 pinned at build
-  time before it runs. Both are cached; a second session downloads nothing.
+  from jsDelivr: 14.3 MB to run on the CPU, or 26.9 MB to run on a graphics
+  card through WebGPU (Settings → Compute → CPU keeps to the first). Both are
+  cached; a second session downloads nothing.
+- **The engine is downloaded, not bundled**, because it would make `main.js`
+  14 to 41 MB larger, and Obsidian reads and parses that file every time it
+  starts, for every reader, including the ones who never turn semantic search
+  on. It is fetched only after you agree, from the URL of the exact
+  onnxruntime-web release the plugin was built with, and checked against that
+  file's SHA-256, fixed at build time, before it is cached and every time it is
+  loaded. A file that does not match is refused and never run. It is the
+  engine's WebAssembly only: its JavaScript is part of `main.js`, and no code
+  is fetched from anywhere else.
 - **Nothing leaves the device.** The model runs locally in a worker; notes and
   queries are never uploaded.
 - How a query is embedded — pooling and the query prefix — is read from the
