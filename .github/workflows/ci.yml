@@ -26,6 +26,10 @@ jobs:
       - name: Install
         shell: bash
         run: npm ci
+      # The community directory's review rules; see eslint.config.mjs.
+      - name: Lint
+        shell: bash
+        run: npm run lint
       - name: Test
         shell: bash
         run: npm test
