@@ -114,7 +114,6 @@ export default class GnosisPlugin extends Plugin {
     /** Asked before resetting settings. */
     confirmReset: (lines: string[]) => Promise<boolean> = (lines) =>
         confirm(this.app, "Reset Gnosis's settings?", lines, "Reset");
-    isMobile = (): boolean => Platform.isMobile;
     /** This session's events and timings, for the diagnostics report. */
     readonly diagnostics = new Diagnostics();
     /** Updates the index once edits settle; tests drive it with a fake clock. */
@@ -861,14 +860,6 @@ export default class GnosisPlugin extends Plugin {
             }
             return;
         }
-        if (this.isMobile()) {
-            // Embedding a whole vault on a phone is a different proposition:
-            // build on a desktop, and let this device read the result.
-            if (!auto) {
-                new Notice("Gnosis: building an index is desktop-only — build on a desktop and sync it here", 10_000);
-            }
-            return;
-        }
         const controller = new AbortController();
         this.building = controller;
         this.statusChanged();
@@ -1262,12 +1253,12 @@ export default class GnosisPlugin extends Plugin {
     /**
      * Update the index now, if that is worth doing and needs nobody's say.
      *
-     * Only when the setting is on, on a desktop, with an index to update and
-     * notes that differ from it. Everything a build would ask the reader
-     * becomes a reason it skipped (`runBuildCommand`), which the card shows.
+     * Only when the setting is on, with an index to update and notes that
+     * differ from it. Everything a build would ask the reader becomes a reason
+     * it skipped (`runBuildCommand`), which the card shows.
      */
     async autoUpdate(): Promise<void> {
-        if (!this.settings.autoUpdate || this.isMobile()) {
+        if (!this.settings.autoUpdate) {
             return;
         }
         if (this.building !== null) {
@@ -1459,9 +1450,7 @@ const SKIP_NO_IMAGE_MODEL =
 const SKIP_NO_MODEL = "Not updated automatically: semantic search is off, so the model is not loaded.";
 
 function platformName(): string {
-    const os = Platform.isMacOS ? "macOS" : Platform.isWin ? "Windows" : Platform.isLinux ? "Linux"
-        : Platform.isIosApp ? "iOS" : Platform.isAndroidApp ? "Android" : "unknown OS";
-    return `${Platform.isMobile ? "mobile" : "desktop"}, ${os}`;
+    return Platform.isMacOS ? "macOS" : Platform.isWin ? "Windows" : Platform.isLinux ? "Linux" : "unknown OS";
 }
 
 /** Every ONNX Runtime build Gnosis may keep, for the model card and Delete. */

@@ -257,12 +257,9 @@ export class App {
 }
 
 export const Platform = {
-    isMobile: false,
     isMacOS: false,
     isWin: false,
     isLinux: true,
-    isIosApp: false,
-    isAndroidApp: false,
 };
 
 export const apiVersion = "0.0.0-test";
