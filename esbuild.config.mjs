@@ -8,7 +8,7 @@
 // (`script/esbuild-worker.mjs`): the only thing fetched at run time is what the
 // reader consents to for semantic search, and none of it is JavaScript.
 import esbuild from "esbuild";
-import builtins from "builtin-modules";
+import { builtinModules } from "node:module";
 import { pathToFileURL } from "node:url";
 import { runtimeDefine, workerPlugin } from "./script/esbuild-worker.mjs";
 
@@ -32,7 +32,7 @@ export function buildOptions({ production, inputs }) {
         plugins: [workerPlugin({ minify: production, inputs })],
         // Obsidian provides these at runtime; bundling them would ship a second
         // copy of the editor.
-        external: ["obsidian", "electron", "@codemirror/*", "@lezer/*", ...builtins],
+        external: ["obsidian", "electron", "@codemirror/*", "@lezer/*", ...builtinModules],
         banner: {
             js: "/* Gnosis for Obsidian. MIT. Bundled third-party code and its licenses: https://github.com/ptsouchlos/obsidian-gnosis/blob/main/THIRD_PARTY_NOTICES.md */",
         },
