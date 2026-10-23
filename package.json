@@ -15,6 +15,7 @@
     "@types/node": "22.14.1",
     "esbuild": "0.25.2",
     "obsidian": "1.14.4",
+    "terser": "5.51.2",
     "typescript": "5.8.3"
   },
   "dependencies": {
