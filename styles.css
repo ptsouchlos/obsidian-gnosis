@@ -152,10 +152,6 @@
     margin-top: var(--size-4-3);
 }
 
-.gnosis-index-bottom:has(.gnosis-index-words:empty) {
-    justify-content: flex-end;
-}
-
 .gnosis-index-words {
     flex: 1;
     min-width: 0;
@@ -524,7 +520,7 @@
 .suggestion-item.gnosis-hit-has-thumb {
 	display: grid;
 	grid-template-columns: auto 1fr;
-	column-gap: var(--size-4-3);
+	gap: 0 var(--size-4-3);
 }
 
 .gnosis-hit-thumb {
