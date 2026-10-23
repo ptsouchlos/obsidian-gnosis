@@ -9,14 +9,20 @@
     "dev": "node esbuild.config.mjs",
     "check": "tsc --noEmit",
     "notices": "node script/notices.mjs",
-    "test": "npm run build && node script/notices.mjs --check && node test/build.mjs && node --test .test-build/*.test.cjs test/bundle.test.cjs"
+    "test": "npm run build && node script/notices.mjs --check && node test/build.mjs && node --test .test-build/*.test.cjs test/bundle.test.cjs",
+    "lint": "eslint src vendor package.json"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@eslint/json": "0.14.0",
     "@types/node": "22.14.1",
     "esbuild": "0.25.2",
+    "eslint": "9.39.5",
+    "eslint-plugin-obsidianmd": "0.4.2",
     "obsidian": "1.14.4",
     "terser": "5.51.2",
-    "typescript": "5.8.3"
+    "typescript": "5.8.3",
+    "typescript-eslint": "8.72.0"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.1"
