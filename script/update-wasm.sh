@@ -27,6 +27,21 @@ EOF
     exit 2
 }
 
+# tidy_typings: make wasm-pack's typings pass the community directory's
+# review, which lints vendored code too. Drop the `/* tslint:disable */` and
+# `/* eslint-disable */` lines they open with, since the review rejects a
+# blanket disable, and type what crosses the boundary as `unknown` rather than
+# `any`, which the review warns about and may not be disabled. The plugin
+# already casts every such value to its own type (`src/types.ts`).
+tidy_typings() {
+    local f
+    for f in "$out"/*.d.ts; do
+        sed -i -E \
+            -e '/^\/\* tslint:disable \*\/$/d' -e '/^\/\* eslint-disable \*\/$/d' \
+            -e '/^\s*(\/\*\*|\*)/!s/\bany\b/unknown/g' "$f"
+    done
+}
+
 # install_archive <file.tar.gz>: verify against <file.tar.gz>.sha256, then
 # replace vendor/gnosis-wasm with its contents.
 install_archive() {
@@ -55,6 +70,7 @@ install_archive() {
     mv "$stage" "$out"
     chmod 755 "$out"
     trap - EXIT
+    tidy_typings
     printf 'vendored gnosis %s\n' "$(paste -sd ' ' "$out/GNOSIS_REV")"
 }
 
@@ -96,6 +112,7 @@ case "${1:-}" in
     # wasm-pack writes a package.json and a .gitignore meant for publishing to
     # npm; neither applies to a vendored copy, and the .gitignore would hide it.
     rm -f "$out/.gitignore" "$out/package.json"
+    tidy_typings
 
     printf 'vendored gnosis %s\n' "$rev"
     ;;
