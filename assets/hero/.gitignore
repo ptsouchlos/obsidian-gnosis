@@ -1,0 +1,4 @@
+# patched color config written by fix-ocio.sh (copied from the local Blender install)
+.ocio/
+# Blender's automatic backups
+*.blend1
