@@ -1,5 +1,7 @@
 # Gnosis for Obsidian
 
+![Gnosis's search prompt and related-notes panel floating in front of an Obsidian window](docs/images/hero.png)
+
 Search your vault with [gnosis](https://github.com/ptsouchlos/gnosis)'s own
 retrieval pipeline, reading a portable index you built on your own machine.
 No server, no API key, nothing leaves the vault.
