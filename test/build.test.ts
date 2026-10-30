@@ -25,10 +25,13 @@ import { runBuild } from "../src/build/job.js";
 import { manifestHash, writeArtifact } from "../src/build/write.js";
 import { stalenessLine } from "../src/staleness.js";
 import { AutoUpdater, QUIET_MS } from "../src/auto-update.js";
+import { indexLocations } from "../src/settings.js";
 
 declare const GNOSIS_TEST_VAULT: string;
 
 const ARTIFACT = ".gnosis/artifact";
+/** The settings' "Plugin folder", in a vault whose config folder keeps its default name. */
+const PLUGIN_INDEX = ".obsidian/plugins/gnosis/index";
 const BGE_INSTRUCTION = "Represent this sentence for searching relevant passages: ";
 
 /** A unit vector from the text's hash: deterministic, and distinct per text. */
@@ -569,34 +572,43 @@ test("moving the index copies it, checks it opens, and only then removes the old
     const root = vaultCopy({ artifact: true });
     const before = shardBytes(root);
     const { plugin } = await load(root);
-    assert.equal(await plugin.moveIndex("Gnosis Index"), true);
+    assert.equal(await plugin.moveIndex(PLUGIN_INDEX), true);
 
-    assert.equal(plugin.settings.artifactDir, "Gnosis Index");
+    assert.equal(plugin.settings.artifactDir, PLUGIN_INDEX);
     assert.ok(!existsSync(join(root, ARTIFACT)), "the old folder is gone");
     assert.ok(existsSync(join(root, ".gnosis")), "but not its parent, where the CLI keeps its database");
-    assert.ok(readFileSync(join(root, "Gnosis Index/shard-0000.bin")).equals(before), "byte for byte");
+    assert.ok(readFileSync(join(root, PLUGIN_INDEX, "shard-0000.bin")).equals(before), "byte for byte");
     const status = await plugin.indexStatus();
     assert.equal(status.state, "ready");
     assert.equal(status.notes, 4);
 });
 
+test("the plugin folder location follows the plugin's own folder, wherever the config folder is", async () => {
+    const { plugin, app } = await load(vaultCopy({ artifact: false }));
+    assert.deepEqual(indexLocations(plugin), { hidden: ARTIFACT, plugin: PLUGIN_INDEX });
+    app.vault.configDir = ".obsidian-mobile";
+    assert.equal(indexLocations(plugin).plugin, ".obsidian-mobile/plugins/gnosis/index");
+    const installed = new GnosisPlugin(app as never, { id: "gnosis", version: "0", dir: ".obsidian/plugins/gnosis-beta" } as never);
+    assert.equal(indexLocations(installed).plugin, ".obsidian/plugins/gnosis-beta/index");
+});
+
 test("moving onto a folder that already holds an index is refused, and touches neither", async () => {
     const root = vaultCopy({ artifact: true });
-    cpSync(join(root, ARTIFACT), join(root, "Gnosis Index"), { recursive: true });
+    cpSync(join(root, ARTIFACT), join(root, PLUGIN_INDEX), { recursive: true });
     const { plugin, app } = await load(root);
-    assert.equal(await plugin.moveIndex("Gnosis Index"), false);
+    assert.equal(await plugin.moveIndex(PLUGIN_INDEX), false);
     assert.equal(plugin.settings.artifactDir, ARTIFACT);
     assert.deepEqual(app.vault.adapter.writes, [], "nothing written or removed");
-    assert.ok(notices.some((n) => n.includes("already an index in Gnosis Index")), JSON.stringify(notices));
+    assert.ok(notices.some((n) => n.includes(`already an index in ${PLUGIN_INDEX}`)), JSON.stringify(notices));
 });
 
 test("with no index yet, moving only changes where the next build writes", async () => {
     const root = vaultCopy({ artifact: false });
     const { plugin, app } = await load(root);
-    assert.equal(await plugin.moveIndex("Gnosis Index"), true);
+    assert.equal(await plugin.moveIndex(PLUGIN_INDEX), true);
     assert.deepEqual(app.vault.adapter.writes, []);
     await plugin.buildIndex();
-    assert.ok(existsSync(join(root, "Gnosis Index/manifest.json")));
+    assert.ok(existsSync(join(root, PLUGIN_INDEX, "manifest.json")));
 });
 
 test("a move whose copy does not open leaves the original and no half-copy", async () => {
@@ -608,10 +620,10 @@ test("a move whose copy does not open leaves the original and no half-copy", asy
     writeFileSync(shard, corrupt);
 
     const { plugin } = await load(root);
-    assert.equal(await plugin.moveIndex("Gnosis Index"), false);
+    assert.equal(await plugin.moveIndex(PLUGIN_INDEX), false);
     assert.equal(plugin.settings.artifactDir, ARTIFACT);
     assert.ok(readFileSync(shard).equals(corrupt), "the original is exactly as it was");
-    assert.ok(!existsSync(join(root, "Gnosis Index")), "and the copy is gone");
+    assert.ok(!existsSync(join(root, PLUGIN_INDEX)), "and the copy is gone");
 });
 
 // ---- Staleness ----------------------------------------------------------------

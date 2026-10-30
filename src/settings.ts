@@ -77,12 +77,14 @@ export interface GnosisSettings {
  *
  * Hidden is where the gnosis CLI writes. Obsidian Sync skips every folder
  * whose name starts with a dot, except the config folder, so a reader who
- * syncs with it needs the index in a visible folder instead.
+ * syncs with it keeps the index in the plugin's own folder there instead,
+ * which Sync carries with its "Installed community plugins" on. The config
+ * folder is the vault's to name, so that path is worked out, not fixed.
  */
-export const INDEX_LOCATIONS = {
-    hidden: ".gnosis/artifact",
-    visible: "Gnosis Index",
-} as const;
+export function indexLocations(plugin: GnosisPlugin): { hidden: string; plugin: string } {
+    const dir = plugin.manifest.dir ?? `${plugin.app.vault.configDir}/plugins/${plugin.manifest.id}`;
+    return { hidden: DEFAULT_SETTINGS.artifactDir, plugin: `${dir}/index` };
+}
 
 export const DEFAULT_SETTINGS: GnosisSettings = {
     artifactDir: ".gnosis/artifact",
@@ -172,6 +174,7 @@ export class GnosisSettingTab extends PluginSettingTab {
         };
 
         const dir = this.plugin.settings.artifactDir;
+        const locations = indexLocations(this.plugin);
         const location = this.card(new Setting(containerEl))
             .setName("Index location")
             .setDesc(
@@ -180,27 +183,28 @@ export class GnosisSettingTab extends PluginSettingTab {
                     const list = f.createEl("ul");
                     list.createEl("li").append(
                         createEl("strong", { text: "Hidden: " }),
-                        `${INDEX_LOCATIONS.hidden}, where the gnosis CLI writes. Syncs with iCloud, Dropbox, Syncthing or git.`,
+                        `${locations.hidden}, where the gnosis CLI writes. Syncs with iCloud, Dropbox, Syncthing or git.`,
                     );
                     list.createEl("li").append(
-                        createEl("strong", { text: "Vault folder: " }),
-                        `a visible "${INDEX_LOCATIONS.visible}" folder. Choose this for Obsidian Sync, which skips ` +
-                            `hidden folders, and turn on its "Sync all other types", or the index files are skipped too.`,
+                        createEl("strong", { text: "Plugin folder: " }),
+                        `${locations.plugin}, beside this plugin's settings. Choose this for Obsidian Sync, which ` +
+                            `skips other hidden folders, and turn on its "Installed community plugins", or the ` +
+                            "index is skipped too.",
                     );
                     f.appendText("Changing it moves the index; nothing is rebuilt.");
                 }),
             );
-        segmented<"hidden" | "visible" | "custom">(
+        segmented<"hidden" | "plugin" | "custom">(
             location.controlEl,
             "Index location",
             [
                 { value: "hidden", label: "Hidden" },
-                { value: "visible", label: "Vault folder" },
+                { value: "plugin", label: "Plugin folder" },
             ],
-            dir === INDEX_LOCATIONS.hidden ? "hidden" : dir === INDEX_LOCATIONS.visible ? "visible" : "custom",
+            dir === locations.hidden ? "hidden" : dir === locations.plugin ? "plugin" : "custom",
             async (value) => {
                 if (value !== "custom") {
-                    await this.plugin.moveIndex(INDEX_LOCATIONS[value]);
+                    await this.plugin.moveIndex(locations[value]);
                 }
                 // Moved or refused, the tab redraws from what is true now.
                 this.display();
