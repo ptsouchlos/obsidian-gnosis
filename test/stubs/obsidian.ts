@@ -91,6 +91,8 @@ class StubAdapter {
 
 class StubVault {
     readonly adapter: StubAdapter;
+    /** The vault's config folder; a reader can rename it, so tests can too. */
+    configDir = ".obsidian";
 
     constructor(private readonly root: string) {
         this.adapter = new StubAdapter(root);
@@ -318,6 +320,8 @@ export interface Command {
 export interface PluginManifest {
     id: string;
     version: string;
+    /** The plugin's folder, vault-relative; Obsidian sets it on load. */
+    dir?: string;
 }
 
 export class Plugin {
