@@ -133,10 +133,16 @@ export function specForNewIndex(modelId: string, vaultName: string, withImages =
  * What replacing an index this device did not write would cost, in lines.
  *
  * The plugin builds the text space of one vault. An index from the CLI can
- * hold more — images, other folders — and a rebuild here would drop them, so
- * the reader is told before agreeing rather than discovering it after.
+ * hold more — images, PDFs, other folders — and a rebuild here would drop
+ * them, so the reader is told before agreeing rather than discovering it
+ * after.
  */
-export function replaceWarning(manifestJson: string, vaultName: string, withImages = false): string[] {
+export function replaceWarning(
+    manifestJson: string,
+    vaultName: string,
+    withImages = false,
+    pdfDocuments = 0,
+): string[] {
     const manifest = JSON.parse(manifestJson) as ManifestView;
     const documents = manifest.shards.reduce((n, s) => n + s.documents, 0);
     const text = manifest.spaces.find((s) => s.space === "text");
@@ -152,6 +158,13 @@ export function replaceWarning(manifestJson: string, vaultName: string, withImag
         lines.push(
             "It also searches images, and Search images is off — the rebuilt index will not " +
                 "include them. Turn Search images on to index them here, or use the gnosis CLI.",
+        );
+    }
+    if (pdfDocuments > 0) {
+        lines.push(
+            `It also holds ${pdfDocuments.toLocaleString()} PDF${pdfDocuments === 1 ? "" : "s"}, ` +
+                "which a rebuild here would drop — this plugin cannot index PDFs yet. " +
+                "Rebuild with the gnosis CLI to keep them.",
         );
     }
     if (manifest.roots.length !== 1 || manifest.roots[0] !== vaultName) {
@@ -205,6 +218,7 @@ export function rebuildWarning(
     format: { found: number; supported: number } | null,
     writtenElsewhere: boolean,
     withImages = false,
+    pdfDocuments = 0,
 ): string[] {
     const lines =
         format === null
@@ -218,7 +232,7 @@ export function rebuildWarning(
             "stays in use until the new one is written, and keeps its model and settings.",
     );
     if (writtenElsewhere) {
-        lines.push(...replaceWarning(manifestJson, vaultName, withImages));
+        lines.push(...replaceWarning(manifestJson, vaultName, withImages, pdfDocuments));
     }
     return lines;
 }

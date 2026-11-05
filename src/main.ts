@@ -25,6 +25,7 @@ import {
     olderFormatMessage,
     openArtifact,
     parseManifest,
+    pdfDocumentCount,
     readArtifact,
     startWasm,
     type RawArtifact,
@@ -1070,13 +1071,17 @@ export default class GnosisPlugin extends Plugin {
             return { outcome: "not started", error: planned.refuse };
         }
         const spec = planned.spec;
+        // A rebuild here drops what this build does not make; the PDFs a CLI
+        // index holds are named in the warning so the reader knows what is at
+        // stake before agreeing.
+        const pdfDocuments = live === null ? 0 : await pdfDocumentCount(live);
 
         const rebuilding = live !== null && (fresh || format !== null);
         if (live !== null && rebuilding) {
             if (auto) {
                 return { outcome: "not started", skipped: SKIP_OLD_FORMAT };
             }
-            const lines = rebuildWarning(live.manifestJson, vaultName, format, liveHash !== this.lastWritten(), withImages);
+            const lines = rebuildWarning(live.manifestJson, vaultName, format, liveHash !== this.lastWritten(), withImages, pdfDocuments);
             if (!(await this.confirmRebuild(lines))) {
                 return { outcome: "not started" };
             }
@@ -1084,7 +1089,7 @@ export default class GnosisPlugin extends Plugin {
             if (auto) {
                 return { outcome: "not started", skipped: SKIP_WRITTEN_ELSEWHERE };
             }
-            if (!(await this.confirmReplace(replaceWarning(live.manifestJson, vaultName, withImages)))) {
+            if (!(await this.confirmReplace(replaceWarning(live.manifestJson, vaultName, withImages, pdfDocuments)))) {
                 return { outcome: "not started" };
             }
         }
@@ -1192,7 +1197,10 @@ export default class GnosisPlugin extends Plugin {
             if (auto) {
                 return { outcome: "not written", result, skipped: SKIP_WRITTEN_ELSEWHERE };
             }
-            if (!(await this.confirmReplace(replaceWarning(current.manifestJson, vaultName, withImages)))) {
+            // The artifact changed under the build, so its PDFs are its own, not
+            // the live one's.
+            const currentPdfs = await pdfDocumentCount(current);
+            if (!(await this.confirmReplace(replaceWarning(current.manifestJson, vaultName, withImages, currentPdfs)))) {
                 return { outcome: "not written", result };
             }
         }
