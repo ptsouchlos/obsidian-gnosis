@@ -57,7 +57,7 @@ import {
     type TextEmbedder,
     type VisionFactory,
 } from "./embedder.js";
-import { LexicalSearchModal, SemanticSearchModal, type Display } from "./modals.js";
+import { LexicalSearchModal, SemanticSearchModal, type Display, type NoteLine } from "./modals.js";
 import { queryModelFor } from "./models.js";
 import type { RelatedState } from "./related/follow.js";
 import { RELATED_VIEW, RelatedView } from "./related/view.js";
@@ -397,9 +397,17 @@ export default class GnosisPlugin extends Plugin {
         if (index === null) {
             return;
         }
-        const lexical = (query: string): Hit[] => {
+        const lexical = (rest: string, kinds: string[]): (Hit | NoteLine)[] => {
+            const note = this.scopeNote(index, kinds);
+            if (note !== null) {
+                return [{ note: true, text: note }];
+            }
             try {
-                return index.lexicalSearch(query, this.settings.limit, undefined) as Hit[];
+                return index.lexicalSearch(
+                    rest,
+                    this.settings.limit,
+                    kinds.length > 0 ? { kinds } : undefined,
+                ) as Hit[];
             } catch (error) {
                 // The query stays out of the log: it is the reader's own words.
                 this.diagnostics.record("error", `keyword search failed: ${describe(error)}`);
@@ -432,12 +440,25 @@ export default class GnosisPlugin extends Plugin {
         new SemanticSearchModal(
             this.app,
             this.display(),
-            async (query) => {
-                const text = space === null ? null : (this.embedder?.ready ?? null);
-                const image = imageSpace === null ? null : (this.imageEmbedder?.ready ?? null);
+            async (rest, kinds) => {
+                const note = this.scopeNote(index, kinds);
+                if (note !== null) {
+                    // A scope nothing here can match: say so, and score it like
+                    // the keyword answer it is.
+                    return {
+                        hits: [{ note: true, text: note }] as (Hit | NoteLine)[],
+                        keywordShare: this.display(true).keywordShare,
+                    };
+                }
+                // A scope embeds with only the model it needs: notes and PDFs
+                // with the text model, images with CLIP's text tower.
+                const wantsText = kinds.length === 0 || kinds.some((kind) => kind !== "image");
+                const wantsImage = kinds.length === 0 || kinds.includes("image");
+                const text = space === null || !wantsText ? null : (this.embedder?.ready ?? null);
+                const image = imageSpace === null || !wantsImage ? null : (this.imageEmbedder?.ready ?? null);
                 if (text === null && image === null) {
                     // Keywords alone while the models load, scored on their scale.
-                    return { hits: lexical(query), keywordShare: this.display(true).keywordShare };
+                    return { hits: lexical(rest, kinds), keywordShare: this.display(true).keywordShare };
                 }
                 try {
                     // One vector per space whose model is ready; a space
@@ -445,16 +466,21 @@ export default class GnosisPlugin extends Plugin {
                     // by keyword.
                     const vectors = new Map<string, Float32Array>();
                     if (text !== null && space !== null) {
-                        for (const [name, vector] of await queryVectors(text, space, query)) {
+                        for (const [name, vector] of await queryVectors(text, space, rest)) {
                             vectors.set(name, vector);
                         }
                     }
                     if (image !== null && imageSpace !== null) {
-                        for (const [name, vector] of await queryVectors(image, imageSpace, query)) {
+                        for (const [name, vector] of await queryVectors(image, imageSpace, rest)) {
                             vectors.set(name, vector);
                         }
                     }
-                    const hits = index.search(query, vectors, this.settings.limit, undefined) as Hit[];
+                    const hits = index.search(
+                        rest,
+                        vectors,
+                        this.settings.limit,
+                        kinds.length > 0 ? { kinds } : undefined,
+                    ) as Hit[];
                     return { hits, keywordShare: null };
                 } catch (error) {
                     this.diagnostics.record("error", `semantic search failed: ${describe(error)}`);
@@ -465,6 +491,32 @@ export default class GnosisPlugin extends Plugin {
             this.embedder?.ready != null || this.imageEmbedder?.ready != null,
             notify,
         ).open();
+    }
+
+    /**
+     * A scope nothing here can match, as the answer to a scoped query: one
+     * line in the result list beats an empty one with no explanation.
+     */
+    private scopeNote(index: Index, kinds: string[]): string | null {
+        if (kinds.includes("image")) {
+            if (!this.settings.searchImages) {
+                return "Image search is off; turn it on in settings.";
+            }
+            if (this.documentsOfKind(index, "image") === 0) {
+                return "The index has no images.";
+            }
+        }
+        if (kinds.includes("pdf")) {
+            if (this.documentsOfKind(index, "pdf") === 0) {
+                return "The index has no PDFs.";
+            }
+        }
+        return null;
+    }
+
+    /** How many documents of a kind the index holds; kinds it has none of are absent. */
+    private documentsOfKind(index: Index, kind: string): number {
+        return (index.info() as IndexInfo).kinds.find((count) => count.kind === kind)?.documents ?? 0;
     }
 
     /**

@@ -478,6 +478,26 @@ test("with both switches on, one query embeds into both spaces", async () => {
     assert.deepEqual(image.seen, ["sourdough"]);
 });
 
+test("a scope embeds only into the space its kind needs", async () => {
+    const text = new StandIn([0, 0, 1, 0]);
+    const image = new StandIn([1, 0, 0]);
+    const { plugin } = await load({ factory: perSpace(text, image) });
+    assert.equal(await plugin.enableSemanticSearch(), true);
+    const modal = await imagePicker(plugin);
+
+    const images = (await modal.type("img: red bicycle")) as Hit[];
+    assert.deepEqual(image.seen, ["red bicycle"], "CLIP sees the words after the prefix");
+    assert.deepEqual(text.seen, [], "and a scope that needs no text model leaves it alone");
+    assert.ok(images.length > 0, "the fixture's image still ranks");
+    assert.ok(images.every((h) => isImage(h)));
+
+    const notes = (await modal.type("txt: sourdough")) as Hit[];
+    assert.deepEqual(text.seen, [`${BGE_INSTRUCTION}sourdough`]);
+    assert.deepEqual(image.seen, ["red bicycle"], "and a text scope leaves CLIP alone");
+    assert.ok(notes.length > 0, "the fixture's notes still rank");
+    assert.ok(notes.every((h) => !isImage(h)));
+});
+
 test("image search does nothing for an index without images", async () => {
     const { plugin } = await load({});
     const index = (await (plugin as never as { withIndex(): Promise<unknown> }).withIndex()) as {

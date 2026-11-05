@@ -30,6 +30,7 @@ await esbuild.build({
     entryPoints: [
         "test/plugin.test.ts",
         "test/semantic.test.ts",
+        "test/scope.test.ts",
         "test/build.test.ts",
         "test/parity.test.ts",
         "test/image-parity.test.ts",
