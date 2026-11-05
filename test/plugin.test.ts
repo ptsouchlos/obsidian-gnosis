@@ -16,6 +16,7 @@ import test from "node:test";
 import { App, notices, openedModals } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
 import { RelatedFollower } from "../src/related/follow.js";
+import type { NoteLine } from "../src/modals.js";
 import { formatScore, linkedPaths, metaLine, relatedLine, scoreLine } from "../src/results.js";
 import type { Hit } from "../src/types.js";
 
@@ -207,6 +208,74 @@ test("keyboard hints name where Cmd/Ctrl opens, and can be turned off", async ()
     run(off.plugin, "search");
     await aModal();
     assert.deepEqual((openedModals.at(-1) as never as { instructions: unknown[] }).instructions, []);
+});
+
+test("a scope nothing here can match is the line, and choosing it does nothing", async () => {
+    const { app, plugin } = await load();
+    run(plugin, "search");
+    await aModal();
+    const modal = openedModals.at(-1)!;
+
+    // Image search is off by default, and the fixture has no PDFs.
+    const images = modal.type("img: red bicycle") as NoteLine[];
+    assert.deepEqual(images, [{ note: true, text: "Image search is off; turn it on in settings." }]);
+    assert.deepEqual(
+        modal.type("pdf: the report"),
+        [{ note: true, text: "The index has no PDFs." }],
+    );
+
+    modal.choose(images[0]!);
+    assert.deepEqual(app.workspace.opened, [], "the line is the answer, not a door");
+    assert.equal(notices.length, 0);
+});
+
+test("txt: searches notes only, with or without the space after the colon", async () => {
+    const { plugin } = await load();
+    run(plugin, "search");
+    await aModal();
+    const modal = openedModals.at(-1)!;
+
+    const spaced = modal.type("txt: hydration") as Hit[];
+    assert.ok(spaced.length > 0, `expected hits, got ${JSON.stringify(spaced)}`);
+    assert.ok(spaced.every((h) => h.path.endsWith(".md")), JSON.stringify(spaced.map((h) => h.path)));
+
+    const unspaced = modal.type("txt:hydration") as Hit[];
+    assert.deepEqual(
+        unspaced.map((h) => h.path),
+        spaced.map((h) => h.path),
+        "the space after the colon is optional",
+    );
+
+    assert.deepEqual(modal.type("img:"), [], "a scope with nothing after it searches nothing");
+});
+
+test("the prompt names what a scope is searching, and an unknown prefix is left alone", async () => {
+    const { plugin } = await load();
+    run(plugin, "search");
+    await aModal();
+    const modal = openedModals.at(-1)!;
+    const scopeLines = () =>
+        (modal as never as { instructions: { command: string; purpose: string }[] }).instructions.filter(
+            (i) => i.command.startsWith("Searching "),
+        );
+
+    modal.type("txt: hydration");
+    assert.deepEqual(scopeLines(), [{ command: "Searching notes", purpose: "" }]);
+    modal.type("img: red bicycle");
+    assert.deepEqual(scopeLines(), [{ command: "Searching images", purpose: "" }]);
+    modal.type("pdf: the report");
+    assert.deepEqual(scopeLines(), [{ command: "Searching PDFs", purpose: "" }]);
+    modal.type("hydration");
+    assert.deepEqual(scopeLines(), [], "an unprefixed query names no scope");
+    modal.type("todo: call Sam");
+    assert.deepEqual(scopeLines(), [], "a colon mid-query is not a scope");
+});
+
+test("the placeholder names the scope prefixes", async () => {
+    const { plugin } = await load();
+    run(plugin, "search");
+    await aModal();
+    assert.match(openedModals.at(-1)!.getPlaceholder(), /txt: notes, img: images, pdf: PDFs/);
 });
 
 test("scores keep two significant figures, so keyword-only scores stay distinct", () => {

@@ -4,6 +4,20 @@ import { Keymap, Notice, Platform, SuggestModal, getAllTags } from "obsidian";
 import type { App, PaneType, TFile } from "obsidian";
 import type { Hit } from "./types.js";
 import { hitSnippet, hitSubtitle, isImage, metaLine, noteName, resolveHit, scoreLine } from "./results.js";
+import { parseScope, scopeLabel } from "./scope.js";
+
+/**
+ * A line in the result list that says something rather than ranking a
+ * document: a scope the index or the settings cannot match.
+ */
+export interface NoteLine {
+    note: true;
+    text: string;
+}
+
+export function isNoteLine(value: Hit | NoteLine): value is NoteLine {
+    return (value as NoteLine).note === true;
+}
 
 /** How results are shown and opened, read when a picker opens. */
 export interface Display {
@@ -48,7 +62,7 @@ async function copyLink(link: string, file: TFile): Promise<void> {
 }
 
 /** Shared rendering and opening, so every picker behaves identically. */
-abstract class HitModal extends SuggestModal<Hit> {
+abstract class HitModal extends SuggestModal<Hit | NoteLine> {
     /** Set by a key just before it chooses the selected result. */
     private action: Action = "open";
 
@@ -74,17 +88,31 @@ abstract class HitModal extends SuggestModal<Hit> {
             this.selectActiveSuggestion(evt);
             return false;
         });
-        if (display.keyboardHints) {
+        this.setScope([]);
+    }
+
+    /**
+     * The instruction line: the keyboard hints, and, while the query carries
+     * a scope, what it is searching, so a prefix typed by accident is visible.
+     */
+    protected setScope(kinds: string[]): void {
+        const instructions: { command: string; purpose: string }[] = [];
+        if (this.display.keyboardHints) {
             const mod = Platform.isMacOS ? "⌘" : "Ctrl";
-            this.setInstructions([
+            instructions.push(
                 { command: "↑↓", purpose: "to navigate" },
                 { command: "↵", purpose: "to open" },
-                { command: `${mod} ↵`, purpose: `to open in ${PANE_WORDS[display.modOpen]}` },
+                { command: `${mod} ↵`, purpose: `to open in ${PANE_WORDS[this.display.modOpen]}` },
                 { command: "⇧ ↵", purpose: "to insert a link" },
                 { command: `${mod} ⇧ C`, purpose: "to copy a link" },
                 { command: "esc", purpose: "to dismiss" },
-            ]);
+            );
         }
+        const label = scopeLabel(kinds);
+        if (label !== null) {
+            instructions.push({ command: `Searching ${label}`, purpose: "" });
+        }
+        this.setInstructions(instructions);
     }
 
     /** The keywords' share of the blend if these results are keywords alone, else null. */
@@ -92,7 +120,12 @@ abstract class HitModal extends SuggestModal<Hit> {
         return this.display.keywordShare;
     }
 
-    override renderSuggestion(hit: Hit, el: HTMLElement): void {
+    override renderSuggestion(value: Hit | NoteLine, el: HTMLElement): void {
+        if (isNoteLine(value)) {
+            el.createDiv({ cls: "gnosis-search-note", text: value.text });
+            return;
+        }
+        const hit = value;
         const thumbnail = this.thumbnail(hit);
         if (thumbnail !== null) {
             el.addClass("gnosis-hit-has-thumb");
@@ -139,7 +172,13 @@ abstract class HitModal extends SuggestModal<Hit> {
         });
     }
 
-    override onChooseSuggestion(hit: Hit, evt?: MouseEvent | KeyboardEvent): void {
+    override onChooseSuggestion(value: Hit | NoteLine, evt?: MouseEvent | KeyboardEvent): void {
+        if (isNoteLine(value)) {
+            // A note explains why a scope matches nothing: choosing it changes
+            // nothing, and the instruction line already shows the scope.
+            return;
+        }
+        const hit = value;
         const action = this.action;
         this.action = "open";
         const file = resolveHit(this.app, hit);
@@ -172,23 +211,28 @@ abstract class HitModal extends SuggestModal<Hit> {
     protected abstract showMissing(hit: Hit): void;
 }
 
+/** The scope prefixes, named once, where a reader is most likely to look. */
+const SCOPE_HINT = " — txt: notes, img: images, pdf: PDFs";
+
 /** Lexical search: BM25+ over the artifact's text, no model, no download. */
 export class LexicalSearchModal extends HitModal {
     constructor(
         app: App,
         display: Display,
-        private readonly runSearch: (query: string) => Hit[],
+        private readonly runSearch: (rest: string, kinds: string[]) => (Hit | NoteLine)[],
         private readonly notify: (message: string) => void,
     ) {
         super(app, display);
-        this.setPlaceholder("Search your vault with Gnosis…");
+        this.setPlaceholder(`Search your vault with Gnosis… ${SCOPE_HINT}`);
         this.emptyStateText = "No matches.";
     }
 
-    override getSuggestions(query: string): Hit[] {
+    override getSuggestions(query: string): (Hit | NoteLine)[] {
+        const { kinds, rest } = parseScope(query);
+        this.setScope(kinds);
         // Nothing to rank for an empty query, and asking would return an
         // arbitrary slice of the corpus.
-        return query.trim() === "" ? [] : this.runSearch(query);
+        return rest.trim() === "" ? [] : this.runSearch(rest, kinds);
     }
 
     protected override showMissing(hit: Hit): void {
@@ -206,7 +250,7 @@ export class LexicalSearchModal extends HitModal {
 export class SemanticSearchModal extends HitModal {
     /** Bumped per keystroke, so a slow answer to an old query is dropped. */
     private ticket = 0;
-    private last: Hit[] = [];
+    private last: (Hit | NoteLine)[] = [];
     /** As answered: keywords alone while the model loads, then the blend. */
     private share: number | null = null;
 
@@ -217,7 +261,10 @@ export class SemanticSearchModal extends HitModal {
          * The results, and the keywords' share of the blend when they are
          * keywords alone (the model not yet loaded), else null.
          */
-        private readonly runSearch: (query: string) => Promise<{ hits: Hit[]; keywordShare: number | null }>,
+        private readonly runSearch: (
+            rest: string,
+            kinds: string[],
+        ) => Promise<{ hits: (Hit | NoteLine)[]; keywordShare: number | null }>,
         semantic: boolean,
         private readonly notify: (message: string) => void,
         private readonly debounceMs = 150,
@@ -225,15 +272,17 @@ export class SemanticSearchModal extends HitModal {
         super(app, display);
         this.setPlaceholder(
             semantic
-                ? "Search your vault by meaning with Gnosis…"
-                : "Search your vault with Gnosis (keywords while the model loads)…",
+                ? `Search your vault by meaning with Gnosis… ${SCOPE_HINT}`
+                : `Search your vault with Gnosis (keywords while the model loads)… ${SCOPE_HINT}`,
         );
         this.emptyStateText = "No matches.";
     }
 
-    override async getSuggestions(query: string): Promise<Hit[]> {
+    override async getSuggestions(query: string): Promise<(Hit | NoteLine)[]> {
+        const { kinds, rest } = parseScope(query);
+        this.setScope(kinds);
         const ticket = ++this.ticket;
-        if (query.trim() === "") {
+        if (rest.trim() === "") {
             return [];
         }
         // Embedding is the slow part of a query, so wait for typing to pause
@@ -242,7 +291,7 @@ export class SemanticSearchModal extends HitModal {
         if (ticket !== this.ticket) {
             return this.last;
         }
-        const { hits, keywordShare } = await this.runSearch(query);
+        const { hits, keywordShare } = await this.runSearch(rest, kinds);
         if (ticket === this.ticket) {
             this.last = hits;
             this.share = keywordShare;

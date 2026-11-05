@@ -43,6 +43,8 @@ export interface IndexInfo {
     chunks: number;
     quantization: string;
     compression: string;
+    /** How many documents each kind holds; kinds with none are absent. */
+    kinds: { kind: string; documents: number }[];
     roots: string[];
     spaces: SpaceInfo[];
 }
@@ -51,4 +53,6 @@ export interface IndexInfo {
 export interface Filter {
     from?: string[];
     tags?: string[];
+    /** Document kinds to keep (`markdown`, `image`, `pdf`); empty or absent keeps all. */
+    kinds?: string[];
 }

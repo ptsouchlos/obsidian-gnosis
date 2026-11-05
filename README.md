@@ -24,6 +24,12 @@ shows what comes back.
 - **Search vault** — BM25+ over the index's own text. On the scifact benchmark
   this tier scores 0.666 nDCG@10 against the hybrid pipeline's 0.722: worse
   than semantic search, and far from nothing.
+- **A prefix scopes the search** — `txt:` for notes, `img:` for images,
+  `pdf:` for PDFs (`img: red bicycle` searches images only). The prompt says
+  what the scope is searching, and a scope nothing can match — image search
+  off, an index without images or PDFs — says so in the result list. The same
+  prefixes work in hybrid search, and then each model is queried only for the
+  kinds its scope needs.
 - **Related notes** — the most similar notes to the current one, at *full*
   quality, because both sides of that comparison are vectors the index already
   carries. Notes the current one already links to are excluded, so what is left
@@ -109,7 +115,8 @@ shows what comes back.
 
 **Limits:**
 
-- PDFs are indexed only by the gnosis CLI.
+- PDFs are indexed only by the gnosis CLI; the `pdf:` prefix finds them in
+  **Search vault** once they are in the index.
 - The index card's "notes changed" line counts notes, not images; a build picks
   up changes to images.
 
