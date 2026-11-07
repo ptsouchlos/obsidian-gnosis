@@ -99,7 +99,7 @@ test("the plugin registers its commands", async () => {
 test("the index describes itself from the artifact in the vault", async () => {
     const { plugin } = await load();
     const lines = await plugin.describeIndex();
-    assert.match(lines[0]!, /^4 documents, 6 chunks$/);
+    assert.match(lines[0]!, /^5 documents, 9 chunks$/);
     assert.ok(
         lines.some((l) => l.startsWith("text: bge-small-en-v1.5 (cls, 4d)")),
         `expected the text space's query model and pooling, got ${JSON.stringify(lines)}`,
@@ -216,13 +216,14 @@ test("a scope nothing here can match is the line, and choosing it does nothing",
     await aModal();
     const modal = openedModals.at(-1)!;
 
-    // Image search is off by default, and the fixture has no PDFs.
+    // Image search is off by default, so the img: scope has nothing to search.
     const images = modal.type("img: red bicycle") as NoteLine[];
     assert.deepEqual(images, [{ note: true, text: "Image search is off; turn it on in settings." }]);
-    assert.deepEqual(
-        modal.type("pdf: the report"),
-        [{ note: true, text: "The index has no PDFs." }],
-    );
+
+    // The pdf: scope, by contrast, reaches the fixture's one PDF.
+    const pdfs = modal.type("pdf: page") as Hit[];
+    assert.ok(pdfs.length > 0, `expected the sample PDF, got ${JSON.stringify(pdfs)}`);
+    assert.ok(pdfs.every((h) => h.path === "notes/sample.pdf"), JSON.stringify(pdfs.map((h) => h.path)));
 
     modal.choose(images[0]!);
     assert.deepEqual(app.workspace.opened, [], "the line is the answer, not a door");

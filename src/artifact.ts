@@ -95,6 +95,11 @@ export async function openArtifact(app: App, dir: string): Promise<Index> {
     return Index.open(raw.manifestJson, raw.shards);
 }
 
+/** How many documents of a kind the index holds; kinds it has none of are absent. */
+export function documentsOfKind(info: IndexInfo, kind: string): number {
+    return info.kinds.find((count) => count.kind === kind)?.documents ?? 0;
+}
+
 /**
  * How many PDF documents this artifact holds.
  *
@@ -110,7 +115,7 @@ export async function pdfDocumentCount(raw: RawArtifact): Promise<number> {
         return 0;
     }
     try {
-        return (index.info() as IndexInfo).kinds.find((count) => count.kind === "pdf")?.documents ?? 0;
+        return documentsOfKind(index.info() as IndexInfo, "pdf");
     } finally {
         index.free();
     }

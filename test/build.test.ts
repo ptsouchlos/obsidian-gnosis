@@ -473,7 +473,7 @@ test("the replace warning names the PDFs a rebuild here would drop", () => {
 test("the PDF count of an index this plugin cannot open is 0", async () => {
     const root = vaultCopy({ artifact: true });
     const live = await readArtifact(new App(root) as never, ARTIFACT);
-    assert.equal(await pdfDocumentCount(live), 0, "the fixture holds no PDFs");
+    assert.equal(await pdfDocumentCount(live), 1, "the fixture's one PDF document");
     inOlderFormat(root, 5);
     const older = await readArtifact(new App(root) as never, ARTIFACT);
     assert.equal(await pdfDocumentCount(older), 0, "an index that will not open names no PDFs");
@@ -516,8 +516,8 @@ test("the index card reads an index someone else wrote from its manifest alone",
     const status = await plugin.indexStatus();
     assert.equal(status.state, "ready");
     assert.equal(status.action, "update");
-    assert.equal(status.notes, 4);
-    assert.equal(status.chunks, 6);
+    assert.equal(status.notes, 5);
+    assert.equal(status.chunks, 9);
     assert.equal(status.builtAt, 1_700_000_400_000);
     assert.equal(status.model, "bge-small-en-v1.5 · 4d");
     assert.equal(status.writtenBy, "another device or the gnosis CLI");
@@ -607,7 +607,7 @@ test("moving the index copies it, checks it opens, and only then removes the old
     assert.ok(readFileSync(join(root, "Gnosis Index/shard-0000.bin")).equals(before), "byte for byte");
     const status = await plugin.indexStatus();
     assert.equal(status.state, "ready");
-    assert.equal(status.notes, 4);
+    assert.equal(status.notes, 5);
 });
 
 test("moving onto a folder that already holds an index is refused, and touches neither", async () => {
