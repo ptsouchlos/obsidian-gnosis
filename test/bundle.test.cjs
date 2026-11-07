@@ -65,7 +65,7 @@ test("the built bundle loads and searches a vault", options, async () => {
 
     // The inlined `.wasm` instantiating at all is the thing being proven here.
     const lines = await plugin.describeIndex();
-    assert.match(lines[0], /^4 documents, 6 chunks$/, `got ${JSON.stringify(lines)}`);
+    assert.match(lines[0], /^5 documents, 9 chunks$/, `got ${JSON.stringify(lines)}`);
 
     plugin.commands.get("search").callback();
     await waitFor("the search modal", () => stub.openedModals.length > 0);

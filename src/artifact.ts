@@ -9,6 +9,7 @@
 import type { App } from "obsidian";
 import init, { Index, artifactFormatVersion } from "../vendor/gnosis-wasm/gnosis_wasm.js";
 import wasmBytes from "../vendor/gnosis-wasm/gnosis_wasm_bg.wasm";
+import type { IndexInfo } from "./types.js";
 
 /** The manifest, as far as the plugin needs to know. */
 export interface Manifest {
@@ -92,6 +93,32 @@ export async function openArtifact(app: App, dir: string): Promise<Index> {
         throw new Error(olderFormatMessage(format));
     }
     return Index.open(raw.manifestJson, raw.shards);
+}
+
+/** How many documents of a kind the index holds; kinds it has none of are absent. */
+export function documentsOfKind(info: IndexInfo, kind: string): number {
+    return info.kinds.find((count) => count.kind === kind)?.documents ?? 0;
+}
+
+/**
+ * How many PDF documents this artifact holds.
+ *
+ * The manifest keeps no per-kind counts, so the index itself is asked; an
+ * artifact that will not open holds none worth naming.
+ */
+export async function pdfDocumentCount(raw: RawArtifact): Promise<number> {
+    await startWasm();
+    let index: Index;
+    try {
+        index = Index.open(raw.manifestJson, raw.shards);
+    } catch {
+        return 0;
+    }
+    try {
+        return documentsOfKind(index.info() as IndexInfo, "pdf");
+    } finally {
+        index.free();
+    }
 }
 
 /** Parse a manifest's JSON, naming the file when it is not JSON at all. */

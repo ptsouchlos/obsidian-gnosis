@@ -18,7 +18,7 @@
         "id": "clip-vit-b-32-vision",
         "pooling": "mean",
         "dim": 3,
-        "query_id":"clip-vit-b-32",
+        "query_id": "clip-vit-b-32",
         "query_prefix": "",
         "document_prefix": ""
       }
@@ -34,9 +34,9 @@
   "shards": [
     {
       "name": "shard-0000.bin",
-      "hash": "b729dde6f50427c1ca4a04f4ad1d40cb08f9644abe6d52c3a0f93aa74eedac02",
-      "documents": 4,
-      "chunks": 6
+      "hash": "8c2555028fab953ea8dc9cf2cbdce9d60125b12ffffad4ef6728c21b47a9344a",
+      "documents": 5,
+      "chunks": 9
     }
   ]
 }

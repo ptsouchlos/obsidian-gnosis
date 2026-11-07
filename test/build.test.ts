@@ -17,10 +17,10 @@ import GnosisPlugin from "../src/main.js";
 import { MemoryCheckpoints } from "../src/build/checkpoints.js";
 import { MemoryModelStore } from "../src/model-store.js";
 import { RUNTIMES } from "../src/embedder.js";
-import { SHARD_DOCS, replaceWarning, specForNewIndex, specFromManifest, statusLine } from "../src/build/plan.js";
+import { SHARD_DOCS, rebuildWarning, replaceWarning, specForNewIndex, specFromManifest, statusLine } from "../src/build/plan.js";
 import type { TextEmbedder } from "../src/embedder.js";
 import type { IndexInfo } from "../src/types.js";
-import { openArtifact, readArtifact } from "../src/artifact.js";
+import { openArtifact, pdfDocumentCount, readArtifact } from "../src/artifact.js";
 import { runBuild } from "../src/build/job.js";
 import { manifestHash, writeArtifact } from "../src/build/write.js";
 import { stalenessLine } from "../src/staleness.js";
@@ -449,6 +449,36 @@ test("the replace warning is silent about what a rebuild keeps", () => {
     assert.equal(lines.length, 2, `no image or folder warning for a plain one-vault index: ${lines}`);
 });
 
+test("the replace warning names the PDFs a rebuild here would drop", () => {
+    const manifest = JSON.stringify({
+        created_unix: 0,
+        quantization: "i8",
+        compression: "deflate",
+        roots: ["vault"],
+        spaces: [{ space: "text", model: { id: "bge-small-en-v1.5", pooling: "cls", dim: 384, query_prefix: "", document_prefix: "" } }],
+        shards: [{ documents: 3 }],
+    });
+    assert.equal(replaceWarning(manifest, "vault", false, 2).length, 3, "a positive count adds a line");
+    assert.match(replaceWarning(manifest, "vault", false, 2)[2]!, /2 PDFs/);
+    assert.match(replaceWarning(manifest, "vault", false, 2)[2]!, /gnosis CLI/);
+    assert.match(replaceWarning(manifest, "vault", false, 1)[2]!, /1 PDF,/);
+    assert.match(rebuildWarning(manifest, "vault", null, true, false, 3).join(" "), /3 PDFs/);
+    assert.doesNotMatch(
+        rebuildWarning(manifest, "vault", null, false, false, 3).join(" "),
+        /PDF/,
+        "this device's own index has nothing to say",
+    );
+});
+
+test("the PDF count of an index this plugin cannot open is 0", async () => {
+    const root = vaultCopy({ artifact: true });
+    const live = await readArtifact(new App(root) as never, ARTIFACT);
+    assert.equal(await pdfDocumentCount(live), 1, "the fixture's one PDF document");
+    inOlderFormat(root, 5);
+    const older = await readArtifact(new App(root) as never, ARTIFACT);
+    assert.equal(await pdfDocumentCount(older), 0, "an index that will not open names no PDFs");
+});
+
 test("a rebuild keeps another writer's shard size, and moves its own to the plugin's", () => {
     const manifest = JSON.stringify({
         created_unix: 0,
@@ -486,8 +516,8 @@ test("the index card reads an index someone else wrote from its manifest alone",
     const status = await plugin.indexStatus();
     assert.equal(status.state, "ready");
     assert.equal(status.action, "update");
-    assert.equal(status.notes, 4);
-    assert.equal(status.chunks, 6);
+    assert.equal(status.notes, 5);
+    assert.equal(status.chunks, 9);
     assert.equal(status.builtAt, 1_700_000_400_000);
     assert.equal(status.model, "bge-small-en-v1.5 · 4d");
     assert.equal(status.writtenBy, "another device or the gnosis CLI");
@@ -577,7 +607,7 @@ test("moving the index copies it, checks it opens, and only then removes the old
     assert.ok(readFileSync(join(root, "Gnosis Index/shard-0000.bin")).equals(before), "byte for byte");
     const status = await plugin.indexStatus();
     assert.equal(status.state, "ready");
-    assert.equal(status.notes, 4);
+    assert.equal(status.notes, 5);
 });
 
 test("moving onto a folder that already holds an index is refused, and touches neither", async () => {
