@@ -995,3 +995,34 @@ test("a document with more chunks than a batch is embedded in batch-sized calls"
     );
     assert.equal(harness.embedder.seen.length, chunks, "every chunk embedded exactly once");
 });
+
+test("a build that fails on the graphics card loads the models afresh for the next one", async () => {
+    // ONNX Runtime keeps a failed WebGPU buffer, so a session that hit one
+    // fails every later run: the next build must not reuse it.
+    const root = vaultCopy({ artifact: false, extraNotes: 40 });
+    const harness = await load(root, { gpu: true });
+    let failure: string | null =
+        "failed to call OrtRun(). ERROR_CODE: 1, ERROR_MESSAGE: WebGPU validation failed. [Invalid Buffer (unlabeled)] is invalid due to a previous error.";
+    harness.embedder.afterBatch = () => {
+        if (failure !== null) {
+            const message = failure;
+            failure = null;
+            throw new Error(message);
+        }
+    };
+    await harness.plugin.buildIndex();
+    assert.equal(harness.plugin.diagnostics.lastBuild?.outcome, "failed");
+    assert.deepEqual(harness.devices, ["webgpu"]);
+
+    await harness.plugin.buildIndex();
+    assert.deepEqual(harness.devices, ["webgpu", "webgpu"], "the model was loaded again");
+    assert.equal(harness.plugin.diagnostics.lastBuild?.outcome, "indexed");
+
+    // Any other failure leaves the loaded model alone.
+    writeFileSync(join(root, "notes/hydration.md"), "# Hydration\n\nRewritten.\n");
+    failure = "the disk is full";
+    await harness.plugin.buildIndex();
+    assert.equal(harness.plugin.diagnostics.lastBuild?.outcome, "failed");
+    await harness.plugin.buildIndex();
+    assert.deepEqual(harness.devices, ["webgpu", "webgpu"], "no reload after an ordinary failure");
+});
