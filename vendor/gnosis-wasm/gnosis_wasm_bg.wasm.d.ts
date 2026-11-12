@@ -4,6 +4,7 @@ export const __wbg_index_free: (a: number, b: number) => void;
 export const artifactFormatVersion: () => number;
 export const builder_addDocument: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const builder_addImage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const builder_addPdf: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const builder_create: (a: number, b: number) => void;
 export const builder_documentCount: (a: number, b: number) => void;
 export const builder_finish: (a: number, b: number, c: number) => void;
@@ -11,6 +12,7 @@ export const builder_fromArtifact: (a: number, b: number, c: number, d: number, 
 export const builder_pendingCount: (a: number, b: number) => void;
 export const builder_removeDocument: (a: number, b: number, c: number, d: number) => void;
 export const builder_setImageVector: (a: number, b: number, c: number, d: number, e: number) => void;
+export const builder_setPdfPages: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const builder_setTitleVector: (a: number, b: number, c: number, d: number, e: number) => void;
 export const builder_setVectors: (a: number, b: number, c: number, d: number, e: number) => void;
 export const contentHash: (a: number, b: number, c: number) => void;

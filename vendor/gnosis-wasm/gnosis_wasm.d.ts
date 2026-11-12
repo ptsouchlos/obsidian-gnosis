@@ -22,6 +22,14 @@ export class Builder {
      */
     addImage(path: string, hash: string, mtime_ms: number): unknown;
     /**
+     * Offer one PDF to the index.
+     *
+     * `hash` is `contentHashBytes` of the file's bytes. An unchanged PDF is
+     * carried over unchanged; a new or changed one is followed by
+     * `setPdfPages` and `setVectors`.
+     */
+    addPdf(path: string, hash: string, mtime_ms: number): unknown;
+    /**
      * A builder with nothing to reuse: every document will be embedded.
      */
     static create(spec: unknown): Builder;
@@ -48,14 +56,27 @@ export class Builder {
     pendingCount(): number;
     /**
      * Drop a document that was offered but cannot be completed, such as an
-     * image that will not decode; `gnosis index` skips those too. Returns
-     * whether it was there.
+     * image that will not decode or a PDF that will not extract; `gnosis
+     * index` skips those too. Returns whether it was there.
      */
     removeDocument(path: string): boolean;
     /**
      * Supply an image's vector, from CLIP's vision tower.
      */
     setImageVector(path: string, vector: Float32Array): void;
+    /**
+     * Fill in a new or changed PDF's extracted pages.
+     *
+     * `pages` is the extraction's `{ page, text }` objects, page numbers
+     * and all; a `page` that is not a positive whole number — fractional,
+     * negative, or `NaN` — bails with a `JsError` rather than becoming a
+     * `Page 0` chunk. Supply them in document order, which the chunker
+     * trusts: this only checks that each number is a positive whole number,
+     * and the chunks are labelled `Page {page}` in the order given. Returns
+     * the strings to embed, in chunk order, and the resolved `title` for
+     * the PDF's title proxy when the spec has an image space.
+     */
+    setPdfPages(path: string, title: string, pages: Array<unknown>): unknown;
     /**
      * Supply a document's title-proxy vector, from CLIP's text tower.
      */
@@ -199,6 +220,7 @@ export interface InitOutput {
     readonly artifactFormatVersion: () => number;
     readonly builder_addDocument: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly builder_addImage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly builder_addPdf: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly builder_create: (a: number, b: number) => void;
     readonly builder_documentCount: (a: number, b: number) => void;
     readonly builder_finish: (a: number, b: number, c: number) => void;
@@ -206,6 +228,7 @@ export interface InitOutput {
     readonly builder_pendingCount: (a: number, b: number) => void;
     readonly builder_removeDocument: (a: number, b: number, c: number, d: number) => void;
     readonly builder_setImageVector: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly builder_setPdfPages: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly builder_setTitleVector: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly builder_setVectors: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly contentHash: (a: number, b: number, c: number) => void;

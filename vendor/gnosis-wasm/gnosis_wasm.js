@@ -80,6 +80,36 @@ export class Builder {
         }
     }
     /**
+     * Offer one PDF to the index.
+     *
+     * `hash` is `contentHashBytes` of the file's bytes. An unchanged PDF is
+     * carried over unchanged; a new or changed one is followed by
+     * `setPdfPages` and `setVectors`.
+     * @param {string} path
+     * @param {string} hash
+     * @param {number} mtime_ms
+     * @returns {any}
+     */
+    addPdf(path, hash, mtime_ms) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(hash, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.builder_addPdf(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, mtime_ms);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * A builder with nothing to reuse: every document will be embedded.
      * @param {any} spec
      * @returns {Builder}
@@ -189,8 +219,8 @@ export class Builder {
     }
     /**
      * Drop a document that was offered but cannot be completed, such as an
-     * image that will not decode; `gnosis index` skips those too. Returns
-     * whether it was there.
+     * image that will not decode or a PDF that will not extract; `gnosis
+     * index` skips those too. Returns whether it was there.
      * @param {string} path
      * @returns {boolean}
      */
@@ -227,6 +257,42 @@ export class Builder {
             if (r1) {
                 throw takeObject(r0);
             }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            heap[stack_pointer++] = undefined;
+        }
+    }
+    /**
+     * Fill in a new or changed PDF's extracted pages.
+     *
+     * `pages` is the extraction's `{ page, text }` objects, page numbers
+     * and all; a `page` that is not a positive whole number — fractional,
+     * negative, or `NaN` — bails with a `JsError` rather than becoming a
+     * `Page 0` chunk. Supply them in document order, which the chunker
+     * trusts: this only checks that each number is a positive whole number,
+     * and the chunks are labelled `Page {page}` in the order given. Returns
+     * the strings to embed, in chunk order, and the resolved `title` for
+     * the PDF's title proxy when the spec has an image space.
+     * @param {string} path
+     * @param {string} title
+     * @param {Array<any>} pages
+     * @returns {any}
+     */
+    setPdfPages(path, title, pages) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(title, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.builder_setPdfPages(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, addBorrowedObject(pages));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             heap[stack_pointer++] = undefined;
@@ -631,6 +697,12 @@ function __wbg_get_imports() {
             const ret = getObject(arg0) === undefined;
             return ret;
         },
+        __wbg___wbindgen_number_get_2e0e7dee9f701a71: function(arg0, arg1) {
+            const obj = getObject(arg1);
+            const ret = typeof(obj) === 'number' ? obj : undefined;
+            getDataViewMemory0().setFloat64(arg0 + 8 * 1, isLikeNone(ret) ? 0 : ret, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, !isLikeNone(ret), true);
+        },
         __wbg___wbindgen_string_get_0380ccaa2f57f0d9: function(arg0, arg1) {
             const obj = getObject(arg1);
             const ret = typeof(obj) === 'string' ? obj : undefined;
@@ -654,7 +726,15 @@ function __wbg_get_imports() {
             const ret = Array.from(getObject(arg0));
             return addHeapObject(ret);
         },
+        __wbg_get_31af05bd4842a84f: function() { return handleError(function (arg0, arg1) {
+            const ret = Reflect.get(getObject(arg0), getObject(arg1));
+            return addHeapObject(ret);
+        }, arguments); },
         __wbg_get_6c896e0571ddae51: function(arg0, arg1) {
+            const ret = getObject(arg0)[arg1 >>> 0];
+            return addHeapObject(ret);
+        },
+        __wbg_get_unchecked_288889d017702237: function(arg0, arg1) {
             const ret = getObject(arg0)[arg1 >>> 0];
             return addHeapObject(ret);
         },
@@ -683,6 +763,10 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbg_length_7f3c00c40364105e: function(arg0) {
+            const ret = getObject(arg0).length;
+            return ret;
+        },
+        __wbg_length_d4bdea10311bd9cf: function(arg0) {
             const ret = getObject(arg0).length;
             return ret;
         },
