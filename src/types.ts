@@ -19,6 +19,11 @@ export interface Hit {
     height: number | null;
     /** What `score` is made of; the three add up to it. Mirrors `search::ScoreParts`. */
     parts: { meaning: number; keywords: number; title: number; recency: number };
+    /**
+     * Below its model's relevance floor, with keywords too weak to make up for
+     * it: what had to rank here, not an answer. Mirrors `search::Hit::weak`.
+     */
+    weak: boolean;
 }
 
 /** What a space's model is, as a client needs it to embed a query. */

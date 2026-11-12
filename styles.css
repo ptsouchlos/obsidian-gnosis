@@ -39,6 +39,30 @@
     font-variant-numeric: tabular-nums;
 }
 
+/* Below the model's relevance floor: still listed, but not an answer. The
+   selected one is shown in full, so it reads before it is opened. */
+.suggestion-item.gnosis-hit-weak:not(.is-selected) {
+    opacity: 0.55;
+}
+
+/* The rule above the weak matches. */
+.gnosis-search-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--size-4-2);
+    color: var(--text-faint);
+    font-size: var(--font-ui-smaller);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.gnosis-search-divider::before,
+.gnosis-search-divider::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--background-modifier-border);
+}
+
 /* The search box's selected result: Enter opens it, as the badge says. */
 .suggestion-item.is-selected > .gnosis-hit-title::after {
     content: "↵";

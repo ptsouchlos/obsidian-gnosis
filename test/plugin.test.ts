@@ -16,7 +16,7 @@ import test from "node:test";
 import { App, notices, openedModals } from "./stubs/obsidian.js";
 import GnosisPlugin from "../src/main.js";
 import { RelatedFollower } from "../src/related/follow.js";
-import type { NoteLine } from "../src/modals.js";
+import { NO_STRONG_MATCHES, WEAK_MATCHES, byStrength, type NoteLine } from "../src/modals.js";
 import { formatScore, linkedPaths, metaLine, relatedLine, scoreLine } from "../src/results.js";
 import type { Hit } from "../src/types.js";
 
@@ -328,6 +328,30 @@ test("the score line says what a score is made of", () => {
     const recent = { score: 0.9, parts: { meaning: 0.7, keywords: 0.05, title: 0.1, recency: 0.05 } } as Hit;
     assert.equal(scoreLine(recent, null), "Match 90% · meaning 0.70 · keywords 0.05 · title +0.10 · recent +0.05");
     assert.match(scoreLine({ score: 1.05, parts: { meaning: 0.9, keywords: 0.05, title: 0.1 } } as Hit, null), /^Match 100%/);
+});
+
+test("weak matches go under a rule, after the strong ones, each in rank order", () => {
+    const hit = (path: string, weak: boolean) => ({ path, weak }) as Hit;
+    const paths = (lines: (Hit | NoteLine)[]) => lines.map((l) => ("note" in l ? `<${l.text}>` : l.path));
+
+    // Nothing weak: the list as ranked, no rule.
+    assert.deepEqual(paths(byStrength([hit("a", false), hit("b", false)])), ["a", "b"]);
+    // A keyword-strong hit ranked below a weak one still leads.
+    assert.deepEqual(paths(byStrength([hit("a", false), hit("w1", true), hit("b", false), hit("w2", true)])), [
+        "a",
+        "b",
+        `<${WEAK_MATCHES}>`,
+        "w1",
+        "w2",
+    ]);
+    // Nothing strong: say so first, then the rule.
+    assert.deepEqual(paths(byStrength([hit("w1", true), hit("w2", true)])), [
+        `<${NO_STRONG_MATCHES}>`,
+        `<${WEAK_MATCHES}>`,
+        "w1",
+        "w2",
+    ]);
+    assert.deepEqual(byStrength([]), []);
 });
 
 test("the related line says how similar, and whether the note is already linked", () => {
