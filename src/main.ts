@@ -486,6 +486,9 @@ export default class GnosisPlugin extends Plugin {
                     return { hits, keywordShare: null };
                 } catch (error) {
                     this.diagnostics.record("error", `semantic search failed: ${describe(error)}`);
+                    if (isGpuFailure(error)) {
+                        this.stopEmbedder();
+                    }
                     new Notice(`Gnosis: ${describe(error)}`);
                     return { hits: [], keywordShare: null };
                 }
@@ -923,6 +926,9 @@ export default class GnosisPlugin extends Plugin {
             run = await this.runBuildCommand(controller.signal, auto, fresh);
         } catch (error) {
             run = { outcome: "failed", error: describe(error) };
+            if (isGpuFailure(error)) {
+                this.stopEmbedder();
+            }
             new Notice(`Gnosis: the index build failed — ${describe(error)}. The existing index is unchanged.`, 10_000);
         } finally {
             // Any build that ran settles the question an automatic one was
@@ -1584,6 +1590,17 @@ function describe(error: unknown): string {
         return error.message;
     }
     return typeof error === "string" ? error : JSON.stringify(error);
+}
+
+/**
+ * Whether `error` came from the graphics card: a validation failure, an
+ * allocation that failed, a device the driver reset.
+ *
+ * ONNX Runtime keeps the buffer that failed, so a model that hit one fails
+ * every later run in the same way: it has to be loaded again.
+ */
+function isGpuFailure(error: unknown): boolean {
+    return /webgpu|device (is )?lost/i.test(describe(error));
 }
 
 /**
