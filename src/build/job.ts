@@ -25,6 +25,7 @@
 import { Builder, contentHashBytes } from "../../vendor/gnosis-wasm/gnosis_wasm.js";
 import type { RawArtifact } from "../artifact.js";
 import type { ImageVectors } from "../embedder.js";
+import { extractPdfFile } from "../extract.js";
 
 /** What `Builder.create` takes, as the plugin fills it in. */
 export interface BuildSpec {
@@ -71,11 +72,21 @@ export interface ImageFile {
     read(): Promise<Uint8Array>;
 }
 
+/** One PDF file, read lazily: most of an incremental build is reused. */
+export interface PdfFile {
+    path: string;
+    /** Milliseconds, as Obsidian reports it. */
+    mtime: number;
+    read(): Promise<Uint8Array>;
+}
+
 export interface BuildProgress {
     notesDone: number;
     notesTotal: number;
     imagesDone: number;
     imagesTotal: number;
+    pdfsDone: number;
+    pdfsTotal: number;
     /** Chunks embedded in this run — the slow part, and what the estimate uses. */
     chunksEmbedded: number;
     notesReused: number;
@@ -87,6 +98,8 @@ export interface BuildInput {
     notes: Note[];
     /** Image files, when the spec has an image space. */
     images?: ImageFile[];
+    /** PDF files, when the build indexes PDFs. */
+    pdfs?: PdfFile[];
     /** What to start from: a checkpoint, the live artifact, or nothing. */
     base: RawArtifact | null;
     /** Unit vectors for exactly these strings, in order. */
@@ -112,7 +125,7 @@ export interface BuildInput {
     titleBatch?: number;
 }
 
-/** A file the build left out because it would not decode. */
+/** A file the build left out because it would not decode or extract. */
 export interface SkippedFile {
     path: string;
     message: string;
@@ -131,7 +144,10 @@ export interface BuildResult {
     /** Images embedded in this run, and carried over unchanged. */
     imagesEmbedded: number;
     imagesReused: number;
-    /** Images that would not decode and are not in the index, as `gnosis index` skips them. */
+    /** PDFs whose pages were embedded in this run, and carried over unchanged. */
+    pdfsEmbedded: number;
+    pdfsReused: number;
+    /** Files that would not decode and are not in the index, as `gnosis index` skips them. */
     skipped: SkippedFile[];
     /** True if the signal stopped it; `artifact` is then a checkpoint, not a build. */
     canceled: boolean;
@@ -149,6 +165,8 @@ interface Finished {
 interface Queued {
     path: string;
     texts: string[];
+    /** A PDF's page texts, not a note's: counts toward the PDF progress, not the notes'. */
+    pdf?: boolean;
 }
 
 /**
@@ -188,6 +206,7 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
     const byPath = <T extends { path: string }>(a: T, b: T) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
     const notes = [...input.notes].sort(byPath);
     const images = input.spec.image === undefined ? [] : [...(input.images ?? [])].sort(byPath);
+    const pdfs = [...(input.pdfs ?? [])].sort(byPath);
     if (notes.length === 0) {
         throw new Error("the vault has no notes to index");
     }
@@ -205,11 +224,15 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
     let notesReused = 0;
     let imagesEmbedded = 0;
     let imagesReused = 0;
+    let pdfsEmbedded = 0;
+    let pdfsReused = 0;
     let done = 0;
     let imagesDone = 0;
-    /** Notes and images already in the builder, which a checkpoint has to re-add. */
+    let pdfsDone = 0;
+    /** Notes, images and PDFs already in the builder, which a checkpoint has to re-add. */
     let added: Note[] = [];
     let addedImages: ImageFile[] = [];
+    let addedPdfs: PdfFile[] = [];
     let queue: Queued[] = [];
     let queuedChunks = 0;
     /** Images waiting for the vision tower, with their bytes. */
@@ -224,6 +247,8 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
             notesTotal: notes.length,
             imagesDone,
             imagesTotal: images.length,
+            pdfsDone,
+            pdfsTotal: pdfs.length,
             chunksEmbedded,
             notesReused,
             elapsedMs: input.now() - started,
@@ -261,7 +286,12 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
                     at += v.length;
                 }
                 builder!.setVectors(queued.path, flat);
-                done++;
+                if (queued.pdf) {
+                    pdfsEmbedded++;
+                    pdfsDone++;
+                } else {
+                    done++;
+                }
             }
             chunksEmbedded += size;
             report();
@@ -348,6 +378,13 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
                 throw new Error(`${image.path} changed during the build — run it again`);
             }
         }
+        for (const pdf of addedPdfs) {
+            const hash = contentHashBytes(await pdf.read());
+            const again = builder.addPdf(pdf.path, hash, pdf.mtime) as { reused: boolean };
+            if (!again.reused) {
+                throw new Error(`${pdf.path} changed during the build — run it again`);
+            }
+        }
         lastCheckpoint = input.now();
     };
 
@@ -421,6 +458,59 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
                 await input.yieldToUi();
             }
         }
+        for (const pdf of pdfs) {
+            if (input.signal.aborted) {
+                break;
+            }
+            const bytes = await pdf.read();
+            const result = builder.addPdf(pdf.path, contentHashBytes(bytes), pdf.mtime) as {
+                reused: boolean;
+                title?: string;
+            };
+            addedPdfs.push(pdf);
+            // Owed even to a reused PDF, when the index it came from had no
+            // title proxy for it.
+            if (result.title !== undefined) {
+                titles.push({ path: pdf.path, title: result.title });
+            }
+            if (result.reused) {
+                pdfsReused++;
+                pdfsDone++;
+            } else {
+                let extracted;
+                try {
+                    extracted = await extractPdfFile(bytes);
+                } catch (err) {
+                    // A PDF that will not extract is out of the index, as the
+                    // CLI skips one; the next file gets its own fresh worker.
+                    builder.removeDocument(pdf.path);
+                    skipped.push({ path: pdf.path, message: err instanceof Error ? err.message : String(err) });
+                    addedPdfs = addedPdfs.filter((a) => a.path !== pdf.path);
+                    pdfsDone++;
+                    report();
+                    await input.yieldToUi();
+                    continue;
+                }
+                const pages = builder.setPdfPages(pdf.path, extracted.title, extracted.pages) as {
+                    texts: string[];
+                    title?: string;
+                };
+                // The title the pages owe a proxy with: the extract's title,
+                // the file's stem when the PDF has none.
+                if (pages.title !== undefined) {
+                    titles.push({ path: pdf.path, title: pages.title });
+                }
+                queue.push({ path: pdf.path, texts: pages.texts, pdf: true });
+                queuedChunks += pages.texts.length;
+            }
+            if (full()) {
+                await flush();
+                await maybeCheckpoint();
+            } else if (result.reused && pdfsReused % 200 === 0) {
+                report();
+                await input.yieldToUi();
+            }
+        }
         // Canceled or not, what is queued is finished: it is at most one
         // batch, and a builder with documents still waiting for vectors cannot
         // be finished at all.
@@ -428,7 +518,7 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
         report();
 
         const canceled = input.signal.aborted;
-        if (canceled && added.length + addedImages.length === 0) {
+        if (canceled && added.length + addedImages.length + addedPdfs.length === 0) {
             // Stopped before the first document: nothing new to keep.
             return {
                 artifact: null,
@@ -438,6 +528,8 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
                 notesReused,
                 imagesEmbedded,
                 imagesReused,
+                pdfsEmbedded,
+                pdfsReused,
                 skipped,
                 canceled,
             };
@@ -446,10 +538,23 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
         if (canceled) {
             await input.checkpoint(artifact);
         }
-        return { artifact, documents, chunks, chunksEmbedded, notesReused, imagesEmbedded, imagesReused, skipped, canceled };
+        return {
+            artifact,
+            documents,
+            chunks,
+            chunksEmbedded,
+            notesReused,
+            imagesEmbedded,
+            imagesReused,
+            pdfsEmbedded,
+            pdfsReused,
+            skipped,
+            canceled,
+        };
     } finally {
         added = [];
         addedImages = [];
+        addedPdfs = [];
         queue = [];
         imageQueue = [];
         titles = [];

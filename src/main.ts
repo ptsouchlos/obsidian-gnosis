@@ -32,7 +32,7 @@ import {
     type RawArtifact,
 } from "./artifact.js";
 import { IndexedDbCheckpoints, type CheckpointStore } from "./build/checkpoints.js";
-import { runBuild, type BuildProgress, type BuildResult, type BuildSpec, type ImageFile, type ImageSpec, type Note } from "./build/job.js";
+import { runBuild, type BuildProgress, type BuildResult, type BuildSpec, type ImageFile, type ImageSpec, type Note, type PdfFile } from "./build/job.js";
 import { rebuildWarning, replaceWarning, specForNewIndex, specFromManifest, statusLine } from "./build/plan.js";
 import { copyArtifact, manifestHash, removeArtifact, writeArtifact } from "./build/write.js";
 import { askConsent, confirm, downloadsFor, megabytes, type Download } from "./consent.js";
@@ -1061,6 +1061,9 @@ export default class GnosisPlugin extends Plugin {
         // Images are indexed when the reader has turned image search on, and
         // otherwise left out of an index built here.
         const withImages = this.settings.searchImages;
+        // PDFs are indexed when the reader has turned the switch on, and
+        // otherwise left out of an index built here.
+        const indexPdfs = this.settings.indexPdfs;
         const planned = live === null
             ? specForNewIndex(this.settings.buildModel, vaultName, withImages)
             : specFromManifest(live.manifestJson, vaultName, liveHash === this.lastWritten(), withImages);
@@ -1081,7 +1084,7 @@ export default class GnosisPlugin extends Plugin {
             // index holds are named in the warning so the reader knows what is
             // at stake before agreeing.
             const pdfDocuments = await pdfDocumentCount(live);
-            const lines = rebuildWarning(live.manifestJson, vaultName, format, liveHash !== this.lastWritten(), withImages, pdfDocuments);
+            const lines = rebuildWarning(live.manifestJson, vaultName, format, liveHash !== this.lastWritten(), withImages, pdfDocuments, indexPdfs);
             if (!(await this.confirmRebuild(lines))) {
                 return { outcome: "not started" };
             }
@@ -1090,7 +1093,7 @@ export default class GnosisPlugin extends Plugin {
                 return { outcome: "not started", skipped: SKIP_WRITTEN_ELSEWHERE };
             }
             const pdfDocuments = await pdfDocumentCount(live);
-            if (!(await this.confirmReplace(replaceWarning(live.manifestJson, vaultName, withImages, pdfDocuments)))) {
+            if (!(await this.confirmReplace(replaceWarning(live.manifestJson, vaultName, withImages, pdfDocuments, indexPdfs)))) {
                 return { outcome: "not started" };
             }
         }
@@ -1150,6 +1153,7 @@ export default class GnosisPlugin extends Plugin {
             spec,
             notes: this.notes(),
             images,
+            pdfs: indexPdfs ? this.pdfs() : [],
             base: resuming ? saved.artifact : rebuilding ? null : live,
             embed: (texts) => embedder.embed(texts),
             ...(titleEmbedder === null ? {} : { embedTitles: (titles: string[]) => titleEmbedder.embed(titles) }),
@@ -1170,7 +1174,7 @@ export default class GnosisPlugin extends Plugin {
             void vision?.then((v) => v.dispose(), () => {});
         });
         for (const file of result.skipped) {
-            this.diagnostics.record("error", `skipped an image that would not decode: ${file.message}`);
+            this.diagnostics.record("error", `skipped ${file.path}: ${file.message}`);
         }
 
         if (result.canceled || result.artifact === null) {
@@ -1201,7 +1205,7 @@ export default class GnosisPlugin extends Plugin {
             // The artifact changed under the build, so its PDFs are its own, not
             // the live one's.
             const currentPdfs = await pdfDocumentCount(current);
-            if (!(await this.confirmReplace(replaceWarning(current.manifestJson, vaultName, withImages, currentPdfs)))) {
+            if (!(await this.confirmReplace(replaceWarning(current.manifestJson, vaultName, withImages, currentPdfs, indexPdfs)))) {
                 return { outcome: "not written", result };
             }
         }
@@ -1224,16 +1228,15 @@ export default class GnosisPlugin extends Plugin {
         }
         if (!auto) {
             const pictures = result.imagesEmbedded + result.imagesReused;
-            const imageLine =
-                pictures === 0 && result.skipped.length === 0
-                    ? ""
-                    : ` ${pictures.toLocaleString()} images (${result.imagesEmbedded.toLocaleString()} embedded)` +
-                      (result.skipped.length === 0 ? "." : `, ${result.skipped.length.toLocaleString()} skipped as unreadable.`);
+            const books = result.pdfsEmbedded + result.pdfsReused;
+            const imageLine = pictures === 0 ? "" : ` ${pictures.toLocaleString()} images (${result.imagesEmbedded.toLocaleString()} embedded).`;
+            const pdfsLine = books === 0 ? "" : ` ${books.toLocaleString()} PDFs (${result.pdfsEmbedded.toLocaleString()} embedded).`;
+            const skippedLine = result.skipped.length === 0 ? "" : ` ${result.skipped.length.toLocaleString()} skipped as unreadable.`;
             new Notice(
-                `Gnosis: indexed ${result.documents.toLocaleString()} ${pictures === 0 ? "notes" : "documents"}, ` +
+                `Gnosis: indexed ${result.documents.toLocaleString()} ${pictures === 0 && books === 0 ? "notes" : "documents"}, ` +
                     `${result.chunks.toLocaleString()} chunks — ${result.chunksEmbedded.toLocaleString()} ` +
                     `embedded, ${result.notesReused.toLocaleString()} notes unchanged; ` +
-                    `${written.written} of ${written.written + written.unchanged} shard(s) written.${imageLine}`,
+                    `${written.written} of ${written.written + written.unchanged} shard(s) written.${imageLine}${pdfsLine}${skippedLine}`,
                 10_000,
             );
         }
@@ -1282,6 +1285,21 @@ export default class GnosisPlugin extends Plugin {
         return this.app.vault
             .getFiles()
             .filter((file) => IMAGE_EXTENSIONS.has(file.extension.toLowerCase()) && !this.isExcluded(file.path))
+            .map((file) => ({
+                path: file.path,
+                mtime: file.stat.mtime,
+                read: async () => new Uint8Array(await this.app.vault.readBinary(file)),
+            }));
+    }
+
+    /**
+     * The PDF files `gnosis index` would index, read lazily, and left out
+     * under the same "Excluded files" rule as notes.
+     */
+    private pdfs(): PdfFile[] {
+        return this.app.vault
+            .getFiles()
+            .filter((file) => PDF_EXTENSIONS.has(file.extension.toLowerCase()) && !this.isExcluded(file.path))
             .map((file) => ({
                 path: file.path,
                 mtime: file.stat.mtime,
@@ -1525,6 +1543,8 @@ const CLIP_VISION_MODEL = "clip-vit-b-32-vision";
 const CLIP_MODELS = [CLIP_MODEL, CLIP_VISION_MODEL];
 /** The image files `gnosis index` indexes. */
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp"]);
+/** The PDF files `gnosis index` indexes. */
+const PDF_EXTENSIONS = new Set(["pdf"]);
 
 function embedderKey(space: SpaceInfo, device: Device): string {
     return `${space.queryModel}/${space.pooling}/${device}`;
