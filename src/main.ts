@@ -59,7 +59,7 @@ import {
     type TextEmbedder,
     type VisionFactory,
 } from "./embedder.js";
-import { LexicalSearchModal, SemanticSearchModal, type Display, type NoteLine } from "./modals.js";
+import { LexicalSearchModal, SemanticSearchModal, byStrength, type Display, type NoteLine } from "./modals.js";
 import { queryModelFor } from "./models.js";
 import type { RelatedState } from "./related/follow.js";
 import { RELATED_VIEW, RelatedView } from "./related/view.js";
@@ -483,7 +483,7 @@ export default class GnosisPlugin extends Plugin {
                         this.settings.limit,
                         kinds.length > 0 ? { kinds } : undefined,
                     ) as Hit[];
-                    return { hits, keywordShare: null };
+                    return { hits: byStrength(hits), keywordShare: null };
                 } catch (error) {
                     this.diagnostics.record("error", `semantic search failed: ${describe(error)}`);
                     new Notice(`Gnosis: ${describe(error)}`);

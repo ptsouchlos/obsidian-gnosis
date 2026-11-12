@@ -13,10 +13,33 @@ import { parseScope, scopeLabel } from "./scope.js";
 export interface NoteLine {
     note: true;
     text: string;
+    /** A rule between groups of results rather than a sentence about them. */
+    divider?: true;
 }
 
 export function isNoteLine(value: Hit | NoteLine): value is NoteLine {
     return (value as NoteLine).note === true;
+}
+
+/** The list's first line when nothing in it clears its model's relevance floor. */
+export const NO_STRONG_MATCHES = "No strong matches";
+/** The rule above the weak matches. */
+export const WEAK_MATCHES = "Weak matches";
+
+/**
+ * Strong matches first, then the weak ones under a rule, each group in rank
+ * order. A weak hit is what had to rank somewhere, not an answer: it stays in
+ * the list, since it may still be what the reader wants, but below the line.
+ */
+export function byStrength(hits: Hit[]): (Hit | NoteLine)[] {
+    const strong = hits.filter((hit) => !hit.weak);
+    const weak = hits.filter((hit) => hit.weak);
+    if (weak.length === 0) {
+        return strong;
+    }
+    const lines: (Hit | NoteLine)[] = strong.length === 0 ? [{ note: true, text: NO_STRONG_MATCHES }] : [...strong];
+    lines.push({ note: true, divider: true, text: WEAK_MATCHES }, ...weak);
+    return lines;
 }
 
 /** How results are shown and opened, read when a picker opens. */
@@ -122,10 +145,13 @@ abstract class HitModal extends SuggestModal<Hit | NoteLine> {
 
     override renderSuggestion(value: Hit | NoteLine, el: HTMLElement): void {
         if (isNoteLine(value)) {
-            el.createDiv({ cls: "gnosis-search-note", text: value.text });
+            el.createDiv({ cls: value.divider ? "gnosis-search-divider" : "gnosis-search-note", text: value.text });
             return;
         }
         const hit = value;
+        if (hit.weak) {
+            el.addClass("gnosis-hit-weak");
+        }
         const thumbnail = this.thumbnail(hit);
         if (thumbnail !== null) {
             el.addClass("gnosis-hit-has-thumb");

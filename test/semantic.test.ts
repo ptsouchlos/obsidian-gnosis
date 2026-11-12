@@ -21,6 +21,7 @@ import type { QueryModel } from "../src/models.js";
 import { modelStatus } from "../src/status.js";
 import { isImage } from "../src/results.js";
 import type { Hit, SpaceInfo } from "../src/types.js";
+import { NO_STRONG_MATCHES, WEAK_MATCHES, type NoteLine } from "../src/modals.js";
 
 declare const GNOSIS_TEST_VAULT: string;
 
@@ -201,6 +202,28 @@ test("semantic search finds a note by meaning when no word matches", async () =>
 
     const hits = (await modal.type("xyzzy")) as Hit[];
     assert.equal(hits[0]?.path, "work/planner.md", `got ${JSON.stringify(hits.map((h) => h.path))}`);
+});
+
+test("a query the index cannot answer says so, and lists what it found under a rule", async () => {
+    // Halfway to every basis direction: no chunk is near it, and "xyzzy"
+    // matches no word, so everything is below bge-small's floor.
+    const { plugin } = await load({ embedder: new StandIn([0.5, 0.5, 0.5, 0.5]) });
+    const modal = await semanticPicker(plugin);
+
+    const lines = (await modal.type("xyzzy")) as (Hit | NoteLine)[];
+    const shown = lines.map((l) => ("note" in l ? `<${l.text}>` : l.weak ? "weak" : "strong"));
+    assert.deepEqual(shown.slice(0, 3), [`<${NO_STRONG_MATCHES}>`, `<${WEAK_MATCHES}>`, "weak"], JSON.stringify(shown));
+    assert.ok(!shown.includes("strong"), JSON.stringify(shown));
+});
+
+test("a query near a note lists it as a strong match, with no rule", async () => {
+    const { plugin } = await load({ embedder: new StandIn([0, 0, 1, 0]) });
+    const modal = await semanticPicker(plugin);
+
+    const lines = (await modal.type("xyzzy")) as (Hit | NoteLine)[];
+    const first = lines[0] as Hit;
+    assert.equal(first.path, "work/planner.md");
+    assert.equal(first.weak, false);
 });
 
 test("while the model is still loading, search answers with keywords", async () => {
