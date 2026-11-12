@@ -974,3 +974,24 @@ test("an automatic update keeps to the CPU until the WebGPU engine is here", asy
     await harness.plugin.autoUpdate();
     assert.deepEqual(harness.devices, ["webgpu"], "once it is here, an update uses it");
 });
+
+test("a document with more chunks than a batch is embedded in batch-sized calls", async () => {
+    // One embed call is one GPU job: a long PDF sent whole outran the driver's
+    // job timeout and lost the device. A long note is the same case.
+    const root = vaultCopy({ artifact: false });
+    const sections = Array.from(
+        { length: 40 },
+        (_, i) => `## Section ${i}\n\nParagraph ${i} of a long note, with enough words to be a chunk of its own.\n`,
+    );
+    writeFileSync(join(root, "notes", "long.md"), `# Long\n\n${sections.join("\n")}`);
+    const harness = await load(root);
+    await harness.plugin.buildIndex();
+
+    const { chunks } = await info(root);
+    assert.ok(chunks > 16 * 2, `the long note alone should outsize two batches; the index has ${chunks} chunks`);
+    assert.ok(
+        harness.embedder.batches.every((n) => n <= 16),
+        `every call within the CPU batch of 16: ${JSON.stringify(harness.embedder.batches)}`,
+    );
+    assert.equal(harness.embedder.seen.length, chunks, "every chunk embedded exactly once");
+});
