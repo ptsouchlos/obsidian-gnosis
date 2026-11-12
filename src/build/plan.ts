@@ -142,6 +142,7 @@ export function replaceWarning(
     vaultName: string,
     withImages = false,
     pdfDocuments = 0,
+    indexPdfs = false,
 ): string[] {
     const manifest = JSON.parse(manifestJson) as ManifestView;
     const documents = manifest.shards.reduce((n, s) => n + s.documents, 0);
@@ -160,11 +161,11 @@ export function replaceWarning(
                 "include them. Turn Search images on to index them here, or use the gnosis CLI.",
         );
     }
-    if (pdfDocuments > 0) {
+    if (pdfDocuments > 0 && !indexPdfs) {
         lines.push(
-            `It also holds ${pdfDocuments.toLocaleString()} PDF${pdfDocuments === 1 ? "" : "s"}, ` +
-                "which a rebuild here would drop — this plugin cannot index PDFs yet. " +
-                "Rebuild with the gnosis CLI to keep them.",
+            `It also holds ${pdfDocuments.toLocaleString()} PDF${pdfDocuments === 1 ? "" : "s"}, and ` +
+                "Index PDFs is off — the rebuilt index will not include them. " +
+                "Turn Index PDFs on to index them here, or rebuild with the gnosis CLI.",
         );
     }
     if (manifest.roots.length !== 1 || manifest.roots[0] !== vaultName) {
@@ -179,9 +180,15 @@ export function replaceWarning(
 /** A rough minutes-left figure, once there is enough history to make one. */
 function estimate(progress: BuildProgress): string {
     const embeddedNotes = progress.notesDone - progress.notesReused;
-    // The figure is how fast notes go; images run at their own pace, so with
-    // any in the build it would be a guess dressed as an estimate.
-    if (progress.imagesTotal > 0 || progress.elapsedMs < 20_000 || embeddedNotes < 5 || progress.chunksEmbedded === 0) {
+    // The figure is how fast notes go; images and PDFs run at their own pace,
+    // so with any in the build it would be a guess dressed as an estimate.
+    if (
+        progress.imagesTotal > 0 ||
+        progress.pdfsTotal > 0 ||
+        progress.elapsedMs < 20_000 ||
+        embeddedNotes < 5 ||
+        progress.chunksEmbedded === 0
+    ) {
         return "";
     }
     const chunksPerNote = progress.chunksEmbedded / embeddedNotes;
@@ -198,9 +205,13 @@ export function statusLine(progress: BuildProgress): string {
         progress.imagesTotal === 0
             ? ""
             : ` · ${progress.imagesDone.toLocaleString()}/${progress.imagesTotal.toLocaleString()} images`;
+    const pdfs =
+        progress.pdfsTotal === 0
+            ? ""
+            : ` · ${progress.pdfsDone.toLocaleString()}/${progress.pdfsTotal.toLocaleString()} PDFs`;
     return (
         `Gnosis: indexing ${progress.notesDone.toLocaleString()}/${progress.notesTotal.toLocaleString()} notes` +
-        `${images} · ${progress.chunksEmbedded.toLocaleString()} chunks embedded${estimate(progress)}`
+        `${images}${pdfs} · ${progress.chunksEmbedded.toLocaleString()} chunks embedded${estimate(progress)}`
     );
 }
 
@@ -219,6 +230,7 @@ export function rebuildWarning(
     writtenElsewhere: boolean,
     withImages = false,
     pdfDocuments = 0,
+    indexPdfs = false,
 ): string[] {
     const lines =
         format === null
@@ -232,7 +244,7 @@ export function rebuildWarning(
             "stays in use until the new one is written, and keeps its model and settings.",
     );
     if (writtenElsewhere) {
-        lines.push(...replaceWarning(manifestJson, vaultName, withImages, pdfDocuments));
+        lines.push(...replaceWarning(manifestJson, vaultName, withImages, pdfDocuments, indexPdfs));
     }
     return lines;
 }

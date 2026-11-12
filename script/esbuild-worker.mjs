@@ -149,6 +149,10 @@ async function bundleWorker(path, { minify, gpu }) {
         minify,
         logLevel: "warning",
         plugins: [loaderPlugin({ gpu })],
+        // The extract worker inlines its own wasm, as the main bundle does with
+        // the query client's module: the `binary` loader hands it over as a
+        // `Uint8Array` the glue instantiates directly.
+        loader: { ".wasm": "binary" },
         // The CPU worker takes ONNX Runtime's build that loads its loader
         // separately, so threads can start from it (see `loaderPlugin`).
         conditions: gpu ? [] : ["onnxruntime-web-use-extern-wasm"],

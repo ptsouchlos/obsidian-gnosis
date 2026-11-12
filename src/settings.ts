@@ -42,6 +42,15 @@ export interface GnosisSettings {
      */
     searchImages: boolean;
     /**
+     * Read the vault's PDFs into the index, page by page, so search reaches
+     * them like notes.
+     *
+     * Off until turned on: a build reads each PDF in whole and embeds every
+     * page, so a vault full of them slows it down. There is nothing to
+     * download — the text model is already there.
+     */
+    indexPdfs: boolean;
+    /**
      * The model "Build index" uses for a vault with no index yet. An existing
      * index is always rebuilt with its own model, whatever this says.
      */
@@ -89,6 +98,7 @@ export const DEFAULT_SETTINGS: GnosisSettings = {
     limit: 20,
     semanticSearch: false,
     searchImages: false,
+    indexPdfs: false,
     buildModel: DEFAULT_BUILD_MODEL,
     strategy: "balanced",
     titleBonus: "default",
@@ -465,6 +475,20 @@ export class GnosisSettingTab extends PluginSettingTab {
                         toggle.setValue(false);
                     }
                     drawSearch();
+                }),
+            );
+
+        this.card(new Setting(containerEl))
+            .setName("Index PDFs")
+            .setDesc(
+                "Read the PDFs in this vault into the index, page by page, so search finds them " +
+                    "like notes. A build reads each PDF in whole and embeds every page, so a vault " +
+                    "full of PDFs builds slower than one without.",
+            )
+            .addToggle((toggle) =>
+                toggle.setValue(this.plugin.settings.indexPdfs).onChange(async (on) => {
+                    this.plugin.settings.indexPdfs = on;
+                    await this.plugin.saveSettings();
                 }),
             );
 
