@@ -1,7 +1,8 @@
 name: Update gnosis-wasm
 
 # A gnosis release dispatches `gnosis-release` with its tag; this vendors that
-# release's wasm query client and opens (or updates) a pull request with it.
+# release's two wasm bundles (the query client and the PDF text extractor) and
+# opens (or updates) a pull request with them.
 # Run it by hand with a tag, or with none for the latest release.
 on:
   repository_dispatch:
@@ -62,9 +63,12 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           wasm=vendor/gnosis-wasm/gnosis_wasm_bg.wasm
-          before="$(stat -c %s "$wasm")"
+          extract=vendor/gnosis-extract/gnosis_extract_bg.wasm
+          wasm_before="$(stat -c %s "$wasm")"
+          extract_before="$(stat -c %s "$extract")"
           script/update-wasm.sh --release "$TAG"
-          after="$(stat -c %s "$wasm")"
+          wasm_after="$(stat -c %s "$wasm")"
+          extract_after="$(stat -c %s "$extract")"
           if [ -z "$(git status --porcelain vendor)" ]; then
             echo "vendor/ already holds $TAG; nothing to do."
             echo "changed=false" >>"$GITHUB_OUTPUT"
@@ -73,11 +77,14 @@ jobs:
           echo "changed=true" >>"$GITHUB_OUTPUT"
           {
             echo "body<<EOF_BODY"
-            echo "Re-vendors the wasm query client from gnosis [$TAG](https://github.com/ptsouchlos/gnosis/releases/tag/$TAG)."
+            echo "Re-vendors the wasm query client and the PDF text extractor from gnosis [$TAG](https://github.com/ptsouchlos/gnosis/releases/tag/$TAG)."
             echo
-            echo "\`gnosis_wasm_bg.wasm\`: $before → $after bytes."
+            echo "\`gnosis_wasm_bg.wasm\`: $wasm_before → $wasm_after bytes."
+            echo
+            echo "\`gnosis_extract_bg.wasm\`: $extract_before → $extract_after bytes."
             echo
             echo "- [ ] Checked in Obsidian on Book Notes: keyword search and hybrid search"
+            echo "- [ ] Checked in Obsidian on Book Notes: PDFs index with the Index PDFs setting on"
             echo
             echo "## gnosis $TAG"
             echo
@@ -98,7 +105,9 @@ jobs:
         with:
           token: ${{ steps.app.outputs.token }}
           branch: gnosis/update
-          add-paths: vendor/gnosis-wasm
+          add-paths: |
+            vendor/gnosis-wasm
+            vendor/gnosis-extract
           commit-message: "chore: Re-vendor gnosis-wasm for ${{ steps.release.outputs.tag }}"
           title: "chore: Re-vendor gnosis-wasm for ${{ steps.release.outputs.tag }}"
           body: ${{ steps.vendor.outputs.body }}
