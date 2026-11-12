@@ -241,7 +241,15 @@ export async function runBuild(input: BuildInput): Promise<BuildResult> {
                 batch.push(next);
                 size += next.texts.length;
             }
-            const vectors = await input.embed(batch.flatMap((q) => q.texts));
+            // A batch holds at least one whole note, which can outsize it; the
+            // model still gets at most `batchChunks` texts per call. One call is
+            // one GPU job, and a long one outruns the driver's job timeout and
+            // loses the device.
+            const texts = batch.flatMap((q) => q.texts);
+            const vectors: Float32Array[] = [];
+            for (let i = 0; i < texts.length; i += batchChunks) {
+                vectors.push(...(await input.embed(texts.slice(i, i + batchChunks))));
+            }
             let offset = 0;
             for (const queued of batch) {
                 const own = vectors.slice(offset, offset + queued.texts.length);
